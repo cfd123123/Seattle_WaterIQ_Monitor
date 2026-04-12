@@ -1,0 +1,8 @@
+/* Base reset; theme colors in theme-dark.css */
+body {
+  margin: 0;
+}
+
+#root {
+  min-height: 100vh;
+}

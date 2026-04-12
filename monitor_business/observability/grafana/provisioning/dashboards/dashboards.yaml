@@ -1,0 +1,12 @@
+# 从仓库内 JSON 加载大盘（可 UI 编辑；updateInterval 内会同步文件变更）
+apiVersion: 1
+providers:
+  - name: water-business
+    orgId: 1
+    folder: ""
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/dashboards

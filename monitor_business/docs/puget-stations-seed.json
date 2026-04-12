@@ -1,0 +1,47 @@
+[
+  {
+    "stationCode": "puget_12117000",
+    "stationName": "Snoqualmie River near Snoqualmie, WA",
+    "province": "Washington",
+    "city": "Snoqualmie",
+    "latitude": 47.528,
+    "longitude": -121.825,
+    "externalId": "12117000"
+  },
+  {
+    "stationCode": "puget_12141300",
+    "stationName": "Green River below Howard Hanson Dam at Palmer, WA",
+    "province": "Washington",
+    "city": "Palmer",
+    "latitude": 47.276,
+    "longitude": -121.616,
+    "externalId": "12141300"
+  },
+  {
+    "stationCode": "puget_12145500",
+    "stationName": "Green River near Auburn, WA",
+    "province": "Washington",
+    "city": "Auburn",
+    "latitude": 47.298,
+    "longitude": -122.234,
+    "externalId": "12145500"
+  },
+  {
+    "stationCode": "puget_12175500",
+    "stationName": "Raging River near Fall City, WA",
+    "province": "Washington",
+    "city": "Fall City",
+    "latitude": 47.567,
+    "longitude": -121.908,
+    "externalId": "12175500"
+  },
+  {
+    "stationCode": "puget_12147600",
+    "stationName": "Green River at Duwamish Gardens, WA",
+    "province": "Washington",
+    "city": "Seattle",
+    "latitude": 47.522,
+    "longitude": -122.305,
+    "externalId": "12147600"
+  }
+]

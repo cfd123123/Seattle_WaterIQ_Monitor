@@ -1,0 +1,55 @@
+# --- 本地文档（不推送到 GitHub）---
+/docs/
+/ai_service/data/
+
+# --- 环境与密钥（切勿提交）---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# --- Java / Maven（根目录若执行 mvn 时）---
+target/
+
+# --- Node / 前端构建产物（根目录视角）---
+node_modules/
+dist/
+dist-ssr/
+
+# --- IDE 与系统（仅忽略仓库根目录；子项目内见各自 .gitignore）---
+/.vscode/
+/.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# --- 日志与临时文件 ---
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# --- 测试覆盖率 ---
+coverage/
+htmlcov/
+.coverage
+*.cover

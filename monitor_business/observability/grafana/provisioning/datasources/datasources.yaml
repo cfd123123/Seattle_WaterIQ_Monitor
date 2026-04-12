@@ -1,0 +1,17 @@
+# Tempo + Prometheus（compose 内 prom 抓取宿主机 :8080/actuator/prometheus）
+apiVersion: 1
+datasources:
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    editable: false
+
+  - name: Prometheus
+    type: prometheus
+    uid: prom
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    editable: false

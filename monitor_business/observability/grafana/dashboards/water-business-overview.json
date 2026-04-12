@@ -1,0 +1,528 @@
+{
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {"type": "grafana", "uid": "-- Grafana --"},
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "panels": [
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "panels": [],
+      "title": "HTTP",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 1
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 1},
+      "id": 2,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(rate(http_server_requests_seconds_count{application=\"$application\"}[5m]))",
+          "legendFormat": "总计",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP 总请求速率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 15,
+            "lineWidth": 1
+          },
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 1},
+      "id": 3,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum by (status) (rate(http_server_requests_seconds_count{application=\"$application\"}[5m]))",
+          "legendFormat": "{{status}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP 按状态码速率",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 1},
+      "id": 4,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(http_server_requests_seconds_bucket{application=\"$application\"}[5m])) by (le))",
+          "legendFormat": "p95",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "HTTP 服务端延迟 P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "red", "value": null},
+              {"color": "green", "value": 1}
+            ]
+          }
+        }
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 0, "y": 9},
+      "id": 5,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "up{job=\"spring-boot\"}",
+          "refId": "A"
+        }
+      ],
+      "title": "Prometheus 抓取 UP",
+      "type": "stat"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 13},
+      "id": 6,
+      "panels": [],
+      "title": "业务 water_*",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 1},
+          "unit": "ops"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 0, "y": 14},
+      "id": 7,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(water_ai_predict_seconds_count{application=\"$application\"}[5m]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "AI /predict 调用速率（按 outcome）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1},
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 8, "y": 14},
+      "id": 8,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(water_ai_predict_seconds_bucket{application=\"$application\", outcome=\"success\"}[5m])) by (le))",
+          "legendFormat": "success p95",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "AI 成功耗时 P95",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 1},
+          "unit": "ops"
+        }
+      },
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 14},
+      "id": 9,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "rate(water_alerts_total{application=\"$application\"}[5m])",
+          "legendFormat": "alerts/s",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "告警写入速率（达阈值）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 1},
+          "unit": "ops"
+        }
+      },
+      "gridPos": {"h": 7, "w": 24, "x": 0, "y": 22},
+      "id": 10,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum by (outcome) (rate(water_check_batch_items_total{application=\"$application\"}[5m]))",
+          "legendFormat": "{{outcome}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "批量检测单条处理速率",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 29},
+      "id": 11,
+      "panels": [],
+      "title": "JVM / 数据源",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 20, "lineWidth": 1},
+          "unit": "bytes"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 30},
+      "id": 12,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(jvm_memory_used_bytes{application=\"$application\", area=\"heap\"})",
+          "legendFormat": "heap used",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "JVM 堆内存已用（汇总）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 10, "lineWidth": 1},
+          "unit": "s/s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 30},
+      "id": 13,
+      "options": {"legend": {"displayMode": "table", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(rate(jvm_gc_pause_seconds_sum{application=\"$application\"}[5m])) by (action)",
+          "legendFormat": "{{action}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "GC 暂停时间速率（按 action）",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "custom": {"drawStyle": "line", "fillOpacity": 15, "lineWidth": 1},
+          "unit": "none"
+        }
+      },
+      "gridPos": {"h": 7, "w": 12, "x": 0, "y": 38},
+      "id": 14,
+      "options": {"legend": {"displayMode": "list", "placement": "bottom"}},
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "hikari_connections_active{application=\"$application\"}",
+          "legendFormat": "active",
+          "range": true,
+          "refId": "A"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "hikari_connections_pending{application=\"$application\"}",
+          "legendFormat": "pending",
+          "range": true,
+          "refId": "B"
+        }
+      ],
+      "title": "Hikari 连接（无 DB 时可能无数据）",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
+      "gridPos": {"h": 1, "w": 24, "x": 0, "y": 45},
+      "id": 15,
+      "panels": [],
+      "title": "统计总览（近 24h / 7d）",
+      "type": "row"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "none"}
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 0, "y": 46},
+      "id": 16,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(increase(water_checks_completed_total{application=\"$application\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "近24h 检测数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "none"}
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 6, "y": 46},
+      "id": 17,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(increase(water_alerts_total{application=\"$application\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "近24h 告警数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "none"}
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 12, "y": 46},
+      "id": 18,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(increase(water_ai_predict_seconds_count{application=\"$application\",outcome=\"failure\"}[24h]))",
+          "refId": "A"
+        }
+      ],
+      "title": "近24h AI失败数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}, "unit": "none"}
+      },
+      "gridPos": {"h": 5, "w": 6, "x": 18, "y": 46},
+      "id": 19,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum(water_alerts_total{application=\"$application\"})",
+          "refId": "A"
+        }
+      ],
+      "title": "累计告警数",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}},
+        "overrides": []
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 0, "y": 51},
+      "id": 20,
+      "options": {
+        "displayLabels": ["name", "percent", "value"],
+        "legend": {"displayMode": "list", "placement": "right"},
+        "pieType": "pie",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum by (pollution_level) (increase(water_checks_completed_total{application=\"$application\"}[7d]))",
+          "legendFormat": "{{pollution_level}}",
+          "refId": "A"
+        }
+      ],
+      "title": "近7天污染等级分布",
+      "type": "piechart"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prom"},
+      "fieldConfig": {
+        "defaults": {"color": {"mode": "palette-classic"}},
+        "overrides": []
+      },
+      "gridPos": {"h": 9, "w": 12, "x": 12, "y": 51},
+      "id": 21,
+      "options": {
+        "displayLabels": ["name", "percent", "value"],
+        "legend": {"displayMode": "list", "placement": "right"},
+        "pieType": "pie",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false}
+      },
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prom"},
+          "editorMode": "code",
+          "expr": "sum by (severity) (increase(water_alerts_total{application=\"$application\"}[7d]))",
+          "legendFormat": "{{severity}}",
+          "refId": "A"
+        }
+      ],
+      "title": "近7天告警严重度分布",
+      "type": "piechart"
+    }
+  ],
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["water-business", "monitor_business"],
+  "templating": {
+    "list": [
+      {
+        "current": {"selected": false, "text": "water-business", "value": "water-business"},
+        "datasource": {"type": "prometheus", "uid": "prom"},
+        "hide": 0,
+        "includeAll": false,
+        "label": "Application",
+        "multi": false,
+        "name": "application",
+        "options": [],
+        "query": "label_values(http_server_requests_seconds_count, application)",
+        "refresh": 2,
+        "regex": "",
+        "skipUrlSync": false,
+        "sort": 1,
+        "type": "query"
+      }
+    ]
+  },
+  "time": {"from": "now-1h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "水质业务 · 监控大盘",
+  "uid": "water-business-overview",
+  "version": 3
+}

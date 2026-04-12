@@ -1,0 +1,79 @@
+{
+  "region_label": "WA surface-water IV core sites (auto discovered)",
+  "notes": "Auto-discovered by discover_usgs_sites_for_core_params.py; params=['00010', '00400', '00300', '00095', '63680'], days=90, intersection strategy",
+  "sites": [
+    {
+      "site_no": "12056500",
+      "name": "NF SKOKOMISH R BL STAIRCASE RPDS NR HOODSPORT, WA"
+    },
+    {
+      "site_no": "12090400",
+      "name": "NORTH FORK CLOVER CREEK NEAR PARKLAND, WA"
+    },
+    {
+      "site_no": "12090500",
+      "name": "CLOVER CREEK NEAR TILLICUM, WA"
+    },
+    {
+      "site_no": "12098700",
+      "name": "WHITE RIVER AT HEADWORKS AB FLUME NR BUCKLEY, WA"
+    },
+    {
+      "site_no": "12100490",
+      "name": "WHITE RIVER AT R STREET NEAR AUBURN, WA"
+    },
+    {
+      "site_no": "12101100",
+      "name": "LAKE TAPPS DIVERSION AT DIERINGER, WA"
+    },
+    {
+      "site_no": "12101102",
+      "name": "WHITE RIVER AT 24TH ST E AT DIERINGER, WA"
+    },
+    {
+      "site_no": "12442500",
+      "name": "SIMILKAMEEN RIVER NEAR NIGHTHAWK, WA"
+    },
+    {
+      "site_no": "1247351910",
+      "name": "COLUMBIA RIVER BLW JOHNSON IS NR RICHLAND, WA"
+    },
+    {
+      "site_no": "1247351985",
+      "name": "COLUMBIA RIVER AT HORN RAPIDS RD NR RICHLAND, WA"
+    },
+    {
+      "site_no": "12492900",
+      "name": "OAK CREEK ABOVE TIETON RIVER NEAR NACHES, WA"
+    },
+    {
+      "site_no": "12510500",
+      "name": "YAKIMA RIVER AT KIONA, WA"
+    },
+    {
+      "site_no": "12511800",
+      "name": "YAKIMA RIVER AT VAN GIESEN BR NEAR RICHLAND, WA"
+    },
+    {
+      "site_no": "12514450",
+      "name": "COLUMBIA RIVER ON ATON 49 AT KENNEWICK, WA"
+    },
+    {
+      "site_no": "13343590",
+      "name": "LOWER GRANITE LK FOREBAY AT LOWER GRANITE DAM, WA"
+    }
+  ],
+  "discovery_meta": {
+    "state": "WA",
+    "params": [
+      "00010",
+      "00400",
+      "00300",
+      "00095",
+      "63680"
+    ],
+    "days": 90,
+    "selected_count": 15,
+    "intersection_total": 15
+  }
+}

@@ -6,10 +6,10 @@ import lombok.Data;
 import java.util.List;
 
 /**
- * IV refresh payload for the UI (no large {@code latest_check_payloads} blob).
+ * IV refresh payload for the UI (metadata only).
  */
 @Data
-@Schema(description = "USGS IV refresh result with optional batch-check summary")
+@Schema(description = "USGS IV refresh result")
 public class UsgsIvRefreshResultDto {
 
     private String region;
@@ -29,12 +29,6 @@ public class UsgsIvRefreshResultDto {
     @Schema(description = "Write mode: overwrite means full file replace")
     private String mode;
 
-    @Schema(description = "When post-refresh checks enabled: batch /api/check success count")
-    private Integer checkSyncSuccessCount;
-
-    @Schema(description = "When post-refresh checks enabled: batch /api/check failure count")
-    private Integer checkSyncFailCount;
-
-    @Schema(description = "New IV rows vs old file (same as Python incremental_rows_new)")
+    @Schema(description = "Reserved; may be absent when Python does not compute row diff")
     private Integer incrementalRowsNew;
 }

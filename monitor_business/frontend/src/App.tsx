@@ -11,7 +11,7 @@ import {
   YAxis,
 } from 'recharts'
 import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet'
-import { Link, NavLink, Route, Routes } from 'react-router-dom'
+import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useLocale } from './locale/LocaleContext'
 import { t as translate, type Locale } from './locale/messages'
 import { PUGET_DEMO_SITES } from './pugetDemoSites'
@@ -85,6 +85,11 @@ type StatsTrendApiData = {
   totalTurbidityDetectionCount?: number
   totalTurbidityAnomalyCount?: number
   station_id?: number | null
+}
+
+type StatsOverviewApiData = {
+  uptimeSeconds?: number
+  uptimePercent30d?: number
 }
 
 type StationForm = {
@@ -303,6 +308,12 @@ function formatShortDateTime(iso: string | null | undefined): string {
   return s || '—'
 }
 
+function formatUptimePercentLabel(percent: number | null | undefined): string {
+  if (percent == null || !Number.isFinite(percent) || percent < 0) return '—'
+  const capped = Math.min(100, Math.max(0, percent))
+  return `${capped.toFixed(1)}%`
+}
+
 function parseAlertDetail(detail: string | null | undefined): AlertDetailKv {
   const out: AlertDetailKv = {}
   if (!detail) return out
@@ -362,6 +373,124 @@ function alertModelLabel(a: AlertItem): string {
   return m && m !== '' ? m : '—'
 }
 
+function formatRelativeTime(iso: string, locale: Locale): string {
+  const t = Date.parse(iso)
+  if (!Number.isFinite(t)) return '—'
+  const diffSec = Math.floor((Date.now() - t) / 1000)
+  if (diffSec < 0) return formatShortDateTime(iso)
+  if (diffSec < 60) return locale === 'zh' ? '刚刚' : 'just now'
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return locale === 'zh' ? `${diffMin} 分钟前` : `${diffMin} min ago`
+  const diffH = Math.floor(diffMin / 60)
+  if (diffH < 24) return locale === 'zh' ? `${diffH} 小时前` : `${diffH} hours ago`
+  const diffD = Math.floor(diffH / 24)
+  if (diffD < 14) return locale === 'zh' ? `${diffD} 天前` : `${diffD} days ago`
+  return formatShortDateTime(iso)
+}
+
+function aggregateWorstQualityLabel(stations: MapStationPoint[], locale: Locale): string {
+  const levels = stations
+    .map((s) => (s.latestPollutionLevel || '').trim().toLowerCase())
+    .filter(Boolean)
+  if (levels.length === 0) return translate(locale, 'dashboard.qualityUnknown')
+  const order = ['very poor', 'poor', 'moderate', 'good', 'excellent']
+  const keys = [
+    'dashboard.qualityVeryPoor',
+    'dashboard.qualityPoor',
+    'dashboard.qualityModerate',
+    'dashboard.qualityGood',
+    'dashboard.qualityExcellent',
+  ] as const
+  let worst = 4
+  for (const l of levels) {
+    const idx = order.indexOf(l)
+    if (idx >= 0) worst = Math.min(worst, idx)
+  }
+  return translate(locale, keys[worst])
+}
+
+function alertCategoryBadge(locale: Locale, a: AlertItem): string {
+  const p = alertParameterCd(a)
+  if (p === '00060') return locale === 'zh' ? '流量' : 'Flow'
+  if (p === '63680') return locale === 'zh' ? '浊度' : 'Turbidity'
+  const r = (a.ruleCode || '').toUpperCase()
+  if (r.includes('TURB') || r.includes('63680')) return locale === 'zh' ? '浊度' : 'Turbidity'
+  if (r.includes('00060') || r.includes('FLOW')) return locale === 'zh' ? '流量' : 'Flow'
+  if (r.includes('FORECAST')) return locale === 'zh' ? '水质' : 'Quality'
+  return locale === 'zh' ? '告警' : 'Alert'
+}
+
+function alertSeverityDotClass(severity: string | undefined): string {
+  const s = (severity || '').toUpperCase()
+  if (
+    s.includes('CRITICAL') ||
+    s.includes('HIGH') ||
+    s.includes('严重') ||
+    s.includes('危急')
+  ) {
+    return 'alert-card__dot--critical'
+  }
+  return 'alert-card__dot--warn'
+}
+
+function statusPillClass(level: string | null | undefined): string {
+  const n = (level || '').trim().toLowerCase()
+  if (n === 'excellent') return 'status-pill status-pill--excellent'
+  if (n === 'good') return 'status-pill status-pill--good'
+  if (n === 'moderate') return 'status-pill status-pill--moderate'
+  if (n === 'poor') return 'status-pill status-pill--poor'
+  if (n === 'very poor') return 'status-pill status-pill--verypoor'
+  return 'status-pill status-pill--muted'
+}
+
+function NavIconDash({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M4 19V5M4 19h16M10 19V11h4v8"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M7 14l3-3 3 2 4-5"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  )
+}
+
+function NavIconMap({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M9 19l-6 2V5l6-2 6 2 6-2v16l-6 2-6-2z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M15 5v14M9 3v14"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+      />
+    </svg>
+  )
+}
+
+function NavIconChart({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="17" height="17" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path d="M4 20V10M10 20V4M16 20v-8M22 20V14" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 const http = axios.create({ baseURL: '/api' })
 
 function pollutionColor(level?: string | null): string {
@@ -410,14 +539,27 @@ type Theme = 'dark' | 'light'
 
 function App() {
   const { locale, setLocale, t } = useLocale()
-  const [theme, setTheme] = useState<Theme>(() =>
-    typeof document !== 'undefined' && document.documentElement.dataset.theme === 'light' ? 'light' : 'dark'
-  )
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [theme, setTheme] = useState<Theme>(() => {
+    if (typeof document === 'undefined') return 'light'
+    const saved = localStorage.getItem('water-theme')
+    if (saved === 'light' || saved === 'dark') return saved
+    return 'light'
+  })
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme
     localStorage.setItem('water-theme', theme)
   }, [theme])
+
+  useEffect(() => {
+    if (location.pathname === '/stations' && location.hash === '#add') {
+      window.setTimeout(() => {
+        document.getElementById('station-form-anchor')?.scrollIntoView({ behavior: 'smooth' })
+      }, 80)
+    }
+  }, [location.pathname, location.hash])
   const [stations, setStations] = useState<MapStationPoint[]>([])
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [trend, setTrend] = useState<TrendPoint[]>([])
@@ -436,6 +578,7 @@ function App() {
   } | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [systemUptimeLabel, setSystemUptimeLabel] = useState<string>('—')
   const [form, setForm] = useState<StationForm>({ ...EMPTY_STATION_FORM })
   const [editingStationCode, setEditingStationCode] = useState<string | null>(null)
   const [forecastStationPick, setForecastStationPick] = useState<string>('')
@@ -477,8 +620,6 @@ function App() {
     out: string
     mode?: string
     incrementalRowsNew?: number
-    checkSyncSuccessCount?: number
-    checkSyncFailCount?: number
   } | null>(null)
   const [turbidityScanLoading, setTurbidityScanLoading] = useState(false)
   const [turbidityScanErr, setTurbidityScanErr] = useState<string | null>(null)
@@ -520,17 +661,14 @@ function App() {
     return Math.max(1, m)
   }, [trendChartData])
 
-  const trendSeriesAllZero = useMemo(
-    () =>
-      trendChartData.length > 0 &&
-      trendChartData.every(
-        (p) =>
-          p.flowDetectionCount === 0 &&
-          p.flowAnomalyCount === 0 &&
-          p.turbidityDetectionCount === 0 &&
-          p.turbidityAnomalyCount === 0
-      ),
-    [trendChartData]
+  const totalOpenAlerts = useMemo(
+    () => stations.reduce((acc, s) => acc + (Number(s.openAlertCount) || 0), 0),
+    [stations]
+  )
+
+  const qualitySummaryLabel = useMemo(
+    () => aggregateWorstQualityLabel(stations, locale),
+    [stations, locale]
   )
 
   const applyTrendApiData = useCallback((body: StatsTrendApiData | undefined) => {
@@ -567,6 +705,13 @@ function App() {
   }, [forecastResult])
 
   async function loadTrendForStation(stationId: number | null, label: string | null) {
+    if (stationId == null) {
+      setTrendScopeStation(null)
+      setTrendScopeErr(null)
+      setTrend([])
+      setTrendTotals(null)
+      return
+    }
     setTrendScopeLoading(true)
     setTrendScopeErr(null)
     try {
@@ -657,18 +802,19 @@ function App() {
     setError(null)
     setTrendScopeStation(null)
     setTrendScopeErr(null)
+    setTrend([])
+    setTrendTotals(null)
     try {
-      const trendPath = build7dTrendPath(null)
-      const [stationsRes, alertsRes, trendRes, topRes] = await Promise.all([
+      const [stationsRes, alertsRes, topRes, overviewRes] = await Promise.all([
         http.get<ApiResponse<MapStationPoint[]>>('/map/stations'),
         http.get<ApiResponse<{ content: AlertItem[] }>>('/alerts?page=0&size=8'),
-        http.get<ApiResponse<StatsTrendApiData>>(trendPath),
         http.get<ApiResponse<{ items?: StationAlertTopItem[] }>>('/stats/station-alert-top?days=7&topN=8'),
+        http.get<ApiResponse<StatsOverviewApiData>>('/stats/overview'),
       ])
       setStations(stationsRes.data.data || [])
       setAlerts(alertsRes.data.data?.content || [])
-      applyTrendApiData(trendRes.data.data)
       setStationAlertTop(topRes.data.data?.items || [])
+      setSystemUptimeLabel(formatUptimePercentLabel(overviewRes.data.data?.uptimePercent30d))
     } catch (e) {
       console.error('[monitor-ui] 初始数据加载失败', e)
       if (isAxiosError(e)) {
@@ -679,10 +825,11 @@ function App() {
       }
       setError(apiErrorMessage(e, translate(locale, 'errors.backendUnreachable')))
       setStationAlertTop([])
+      setSystemUptimeLabel('—')
     } finally {
       setLoading(false)
     }
-  }, [locale, applyTrendApiData])
+  }, [locale])
 
   async function refreshIvCsv() {
     const d = Number(ivRefreshDays.trim())
@@ -701,8 +848,6 @@ function App() {
           end: string
           out: string
           mode?: string
-          checkSyncSuccessCount?: number
-          checkSyncFailCount?: number
           incrementalRowsNew?: number
         }>
       >('/usgs/iv/refresh', { days: d, runChecksAfterRefresh: ivRunChecksAfter })
@@ -714,8 +859,6 @@ function App() {
         out: data.out,
         mode: data.mode,
         incrementalRowsNew: data.incrementalRowsNew,
-        checkSyncSuccessCount: data.checkSyncSuccessCount,
-        checkSyncFailCount: data.checkSyncFailCount,
       })
       if (ivRunChecksAfter) {
         await refreshAll()
@@ -921,16 +1064,40 @@ function App() {
 
   return (
     <main className="page">
-      <header className="header">
-        <div className="header-top">
-          <h1>{t('app.title')}</h1>
-          <div className="header-actions">
-            <nav className="app-nav" aria-label={t('common.navAria')}>
-              <NavLink to="/" end>
+      <header className="header header--wm">
+        <div className="header-brand-row">
+          <div className="header-left-cluster">
+            <div className="header-brand">
+              <div className="header-logo" aria-hidden>
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+                  <path
+                    d="M12 3s6 6.2 6 11.2a6 6 0 1 1-12 0C6 9.2 12 3 12 3z"
+                    fill="currentColor"
+                    opacity="0.95"
+                  />
+                </svg>
+              </div>
+              <div className="header-brand-text">
+                <div className="header-brand-name">{t('app.brandName')}</div>
+                <div className="header-brand-sub">{t('app.subtitle')}</div>
+              </div>
+            </div>
+            <nav className="app-nav app-nav--pill" aria-label={t('common.navAria')}>
+              <NavLink className="app-nav__link" to="/" end>
+                <NavIconDash className="app-nav__icon" />
                 {t('nav.home')}
               </NavLink>
-              <NavLink to="/stations">{t('nav.stations')}</NavLink>
+              <NavLink className="app-nav__link" to="/stations">
+                <NavIconMap className="app-nav__icon" />
+                {t('nav.stations')}
+              </NavLink>
+              <NavLink className="app-nav__link" to="/analytics">
+                <NavIconChart className="app-nav__icon" />
+                {t('nav.analytics')}
+              </NavLink>
             </nav>
+          </div>
+          <div className="header-actions">
             <div className="theme-toggle-group" role="group" aria-label={t('common.themeAria')}>
               <button
                 type="button"
@@ -983,52 +1150,333 @@ function App() {
           path="/"
           element={
             <>
-              <section className="card home-registered-summary">
-                <h3>{t('home.registeredTitle')}</h3>
-                <p className="chart-caption">{t('home.registeredHint')}</p>
-                <p>
-                  <Link to="/stations">{t('home.goStations')}</Link>
-                </p>
-                {stations.length === 0 ? (
-                  <p className="station-roster-empty">{t('home.emptyStations')}</p>
-                ) : (
-                  <div className="station-table-wrap">
-                    <table className="station-table">
-                      <thead>
-                        <tr>
-                          <th>stationCode</th>
-                          <th>stationName</th>
-                          <th>externalId</th>
-                          <th>lat</th>
-                          <th>lng</th>
-                          <th>level</th>
-                          <th>open alerts</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {stations.map((s) => (
-                          <tr key={s.stationId}>
-                            <td>
-                              <code>{s.stationCode}</code>
-                            </td>
-                            <td>{s.stationName || '—'}</td>
-                            <td>
-                              <code>{s.externalId || '—'}</code>
-                            </td>
-                            <td>{s.latitude}</td>
-                            <td>{s.longitude}</td>
-                            <td>{s.latestPollutionLevel || '—'}</td>
-                            <td>{s.openAlertCount}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
+              <section className="kpi-grid" aria-label="KPI">
+                <div className="kpi-card">
+                  <div className="kpi-card__icon kpi-card__icon--stations" aria-hidden />
+                  <div className="kpi-card__body">
+                    <span className="kpi-card__label">{t('dashboard.kpiStations')}</span>
+                    <span className="kpi-card__value">{stations.length}</span>
                   </div>
-                )}
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-card__icon kpi-card__icon--alerts" aria-hidden />
+                  <div className="kpi-card__body">
+                    <span className="kpi-card__label">{t('dashboard.kpiAlerts')}</span>
+                    <span className="kpi-card__value">{totalOpenAlerts}</span>
+                  </div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-card__icon kpi-card__icon--quality" aria-hidden />
+                  <div className="kpi-card__body">
+                    <span className="kpi-card__label">{t('dashboard.kpiQuality')}</span>
+                    <span className="kpi-card__value kpi-card__value--text">{qualitySummaryLabel}</span>
+                  </div>
+                </div>
+                <div className="kpi-card">
+                  <div className="kpi-card__icon kpi-card__icon--uptime" aria-hidden />
+                  <div className="kpi-card__body">
+                    <span className="kpi-card__label">{t('dashboard.kpiUptime')}</span>
+                    <span className="kpi-card__value">{systemUptimeLabel}</span>
+                  </div>
+                </div>
               </section>
 
-              <section className="station-form forecast-panel">
-        <h3>{t('forecast.title')}</h3>
+      <div className="dashboard-split">
+        <div className="card map-card">
+          <h3>{t('dashboard.mapTitle')}</h3>
+          <p className="map-card-hint">
+            {stations.length === 0 ? (
+              t('map.emptyHint')
+            ) : (
+              <>
+                {t('map.legend')}
+                <strong>{t('map.legendStrong')}</strong>
+                {t('map.legendAfter')}
+              </>
+            )}
+          </p>
+          <MapContainer
+            key={`${mapCenter[0].toFixed(4)},${mapCenter[1].toFixed(4)}`}
+            center={mapCenter}
+            zoom={mapZoom}
+            style={{ height: 380, width: '100%' }}
+          >
+            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+            {demoSitesOnMap.map((d) => (
+              <CircleMarker
+                key={`demo-${d.externalId}`}
+                center={[d.latitude, d.longitude]}
+                radius={7}
+                pathOptions={{
+                  color: '#64748b',
+                  fillColor: '#94a3b8',
+                  fillOpacity: 0.45,
+                  weight: 2,
+                  dashArray: '4 3',
+                }}
+              >
+                <Popup>
+                  <strong>{t('map.demoTitle')}</strong>
+                  <br />
+                  {d.name}
+                  <br />
+                  USGS：<code>{d.externalId}</code>
+                  <br />
+                  <span className="map-popup-muted">{t('map.demoNote')}</span>
+                </Popup>
+              </CircleMarker>
+            ))}
+            {stations.map((s) => (
+              <CircleMarker
+                key={s.stationId}
+                center={[s.latitude, s.longitude]}
+                radius={9}
+                pathOptions={registeredStationPathOptions(s)}
+                eventHandlers={{
+                  click: () => {
+                    void loadTrendForStation(s.stationId, s.stationName || s.stationCode)
+                  },
+                }}
+              >
+                <Popup>
+                  <strong>{s.stationName || s.stationCode}</strong>
+                  <br />
+                  <span className="map-popup-muted">
+                    {t('map.registeredLine')}
+                    {s.stationCode}
+                  </span>
+                  <br />
+                  {s.city || '-'} / {s.province || '-'}
+                  <br />
+                  {t('map.latestLevel')}
+                  {s.latestPollutionLevel || t('map.noLevelYet')}
+                  <br />
+                  {t('map.openAlerts')}
+                  {s.openAlertCount}
+                  <br />
+                  USGS：{s.externalId || '—'}
+                  <br />
+                  <span className="map-popup-muted">{t('map.popupNote')}</span>
+                  <button
+                    type="button"
+                    className="map-popup-trend-btn"
+                    onClick={(ev) => {
+                      ev.preventDefault()
+                      ev.stopPropagation()
+                      void loadTrendForStation(s.stationId, s.stationName || s.stationCode)
+                    }}
+                  >
+                    {t('map.popupTrendBtn')}
+                  </button>
+                </Popup>
+              </CircleMarker>
+            ))}
+          </MapContainer>
+          <div className="map-legend-bar" aria-label={t('dashboard.mapLegendTitle')}>
+            <span>
+              <i className="map-leg map-leg--excellent" />
+              {t('dashboard.qualityExcellent')}
+            </span>
+            <span>
+              <i className="map-leg map-leg--good" />
+              {t('dashboard.qualityGood')}
+            </span>
+            <span>
+              <i className="map-leg map-leg--moderate" />
+              {t('dashboard.qualityModerate')}
+            </span>
+            <span>
+              <i className="map-leg map-leg--poor" />
+              {t('dashboard.qualityPoor')}
+            </span>
+            <span>
+              <i className="map-leg map-leg--verypoor" />
+              {t('dashboard.qualityVeryPoor')}
+            </span>
+          </div>
+        </div>
+
+        <div className="card alerts-feed">
+          <div className="alerts-feed__head">
+            <h3>{t('dashboard.recentAlerts')}</h3>
+            <span className="alerts-feed__bell" aria-hidden>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                <path
+                  d="M12 22a2 2 0 002-2H10a2 2 0 002 2zm6-6V11a6 6 0 10-12 0v5l-2 2h16l-2-2z"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                />
+              </svg>
+            </span>
+          </div>
+          <div className="alerts-feed__list">
+            {alerts.slice(0, 8).map((a) => (
+              <article key={a.id} className="alert-card">
+                <span className={`alert-card__dot ${alertSeverityDotClass(a.severity)}`} />
+                <div className="alert-card__main">
+                  <div className="alert-card__row1">
+                    <span className="alert-card__place">{alertStationLabel(a, stations)}</span>
+                    <span className="alert-card__time">{formatRelativeTime(a.createdAt, locale)}</span>
+                  </div>
+                  <div className="alert-card__row2">
+                    <span className="alert-card__tag">{alertCategoryBadge(locale, a)}</span>
+                  </div>
+                  <p className="alert-card__desc">
+                    {a.title && a.title.trim() !== '' ? a.title : t('dashboard.alertFallbackTitle')}
+                  </p>
+                </div>
+              </article>
+            ))}
+            {alerts.length === 0 && <p className="alerts-feed__empty">{t('alertTable.empty')}</p>}
+          </div>
+        </div>
+      </div>
+
+      <section className="card trend-card trend-card--wide">
+        <div className="trend-card-head">
+          <h3>{t('dashboard.trendTitleShort')}</h3>
+            {trendScopeStation != null && (
+              <button
+                type="button"
+                className="btn-secondary trend-reset-btn"
+                disabled={trendScopeLoading}
+                onClick={() => void loadTrendForStation(null, null)}
+              >
+                {t('trend.resetAll')}
+              </button>
+            )}
+          </div>
+          {trendScopeStation == null ? (
+            <div className="chart-empty">{t('trend.clickStationPrompt')}</div>
+          ) : (
+            <>
+              <p className="chart-caption trend-scope-caption">
+                <>
+                  {t('trend.scopeStation')}
+                  <strong>{trendScopeStation.label}</strong>（<code>stationId={trendScopeStation.stationId}</code>
+                  {t('trend.scopeStationAfter')}
+                </>
+              </p>
+              <p className="chart-caption trend-legend-usgs">
+                <span className="trend-legend-group">
+                  <span className="swatch swatch-flow-det" /> {t('trend.lineFlowDet')}
+                </span>
+                <span className="trend-legend-group">
+                  <span className="swatch swatch-flow-if" /> {t('trend.lineFlowIf')}
+                </span>
+                <span className="trend-legend-group">
+                  <span className="swatch swatch-turb-det" /> {t('trend.lineTurbDet')}
+                </span>
+                <span className="trend-legend-group">
+                  <span className="swatch swatch-turb-anom" /> {t('trend.lineTurbAnom')}
+                </span>
+                {trendScopeLoading ? <span className="trend-loading-inline">{t('trend.loading')}</span> : null}
+              </p>
+              {trendScopeErr != null && <p className="trend-scope-err">{trendScopeErr}</p>}
+              {trendTotals != null && (
+                <p className="trend-totals-line forecast-muted">
+                  {t('trend.totalsPrefix')}
+                  <strong>{trendTotals.totalFlowDetectionCount}</strong>
+                  {t('trend.totalsMid1')}
+                  <strong>{trendTotals.totalFlowAnomalyCount}</strong>
+                  {t('trend.totalsMid2')}
+                  <strong>{trendTotals.totalTurbidityDetectionCount}</strong>
+                  {t('trend.totalsMid3')}
+                  <strong>{trendTotals.totalTurbidityAnomalyCount}</strong>
+                  {' · '}
+                  {t('trend.totalsAlerts')}
+                  <strong>{trendTotals.totalAlertCount}</strong>
+                  {`${t('trend.scopeStationParen')}${trendScopeStation.stationId}${t('trend.scopeStationCloseParen')}`}
+                </p>
+              )}
+              {trend.length === 0 ? (
+                <div className="chart-empty">
+                  <>
+                    {t('trend.emptyStation')}
+                    {trendScopeStation.label}
+                    {t('trend.emptyStationAfter')}
+                  </>
+                </div>
+              ) : (
+                <ResponsiveContainer width="100%" height={280}>
+                  <LineChart
+                    data={trendChartData}
+                    margin={{ top: 8, right: 12, left: 4, bottom: 8 }}
+                  >
+                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
+                    <XAxis dataKey="date" tick={{ fill: 'var(--wm-text-muted)', fontSize: 11 }} />
+                    <YAxis
+                      allowDecimals={false}
+                      domain={[0, trendYAxisMax]}
+                      tick={{ fill: 'var(--wm-text-muted)', fontSize: 11 }}
+                    />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'var(--wm-bg-elevated)',
+                        border: '1px solid var(--wm-border)',
+                        borderRadius: 8,
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Line
+                      type="linear"
+                      dataKey="flowDetectionCount"
+                      stroke="#38bdf8"
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 1, fill: '#38bdf8' }}
+                      activeDot={{ r: 5 }}
+                      isAnimationActive={false}
+                      name={t('trend.lineFlowDet')}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="flowAnomalyCount"
+                      stroke="#7dd3fc"
+                      strokeDasharray="6 4"
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 1, fill: '#7dd3fc' }}
+                      activeDot={{ r: 5 }}
+                      isAnimationActive={false}
+                      name={t('trend.lineFlowIf')}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="turbidityDetectionCount"
+                      stroke="#34d399"
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 1, fill: '#34d399' }}
+                      activeDot={{ r: 5 }}
+                      isAnimationActive={false}
+                      name={t('trend.lineTurbDet')}
+                    />
+                    <Line
+                      type="linear"
+                      dataKey="turbidityAnomalyCount"
+                      stroke="#6ee7b7"
+                      strokeDasharray="6 4"
+                      strokeWidth={2}
+                      dot={{ r: 3, strokeWidth: 1, fill: '#6ee7b7' }}
+                      activeDot={{ r: 5 }}
+                      isAnimationActive={false}
+                      name={t('trend.lineTurbAnom')}
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
+              )}
+            </>
+          )}
+      </section>
+            </>
+          }
+        />
+        <Route
+          path="/analytics"
+          element={
+            <>
+              <h1 className="analytics-page-title">{t('analytics.pageTitle')}</h1>
+              <section className="station-form forecast-panel forecast-panel--analytics">
+        <h3 className="forecast-card-heading">{t('analytics.forecastCardTitle')}</h3>
+        <p className="analytics-card-desc">{t('analytics.forecastCardDesc')}</p>
         <div className="auto-forecast-row">
           <div className="auto-forecast-actions">
             <label className="auto-forecast-label">
@@ -1196,6 +1644,7 @@ function App() {
           <code>/api/usgs/turbidity-threshold/scan</code>
           {t('forecast.hintH19')}
         </p>
+        <h4 className="analytics-subhead">{t('analytics.opsTitle')}</h4>
         <div className="iv-refresh-row">
           <label className="iv-refresh-label" htmlFor="iv-refresh-days">
             {t('forecast.ivBacktrackDays')}
@@ -1291,14 +1740,6 @@ function App() {
                 {t('forecast.ivIncrementalEnd')}
               </span>
             )}
-            {ivRefreshResult.checkSyncSuccessCount != null && (
-              <span>
-                {t('forecast.ivBatchCheck')}
-                <strong>{ivRefreshResult.checkSyncSuccessCount}</strong>
-                {t('forecast.ivBatchCheckFail')}
-                <strong>{ivRefreshResult.checkSyncFailCount ?? 0}</strong>
-              </span>
-            )}
             <code className="iv-refresh-path">{ivRefreshResult.out}</code>
           </div>
         )}
@@ -1373,7 +1814,7 @@ function App() {
             }
           />
           <button type="button" onClick={() => void submitForecast()} disabled={forecastLoading}>
-            {forecastLoading ? t('forecast.forecasting') : t('forecast.runForecast')}
+            {forecastLoading ? t('forecast.forecasting') : t('forecast.generateForecast')}
           </button>
         </div>
         <div className="anomaly-from-iv-row anomaly-dual-row">
@@ -1556,263 +1997,15 @@ function App() {
         )}
       </section>
 
-      <section className="main-grid">
-        <div className="card map-card">
-          <h3>{t('map.title')}</h3>
-          <p className="map-card-hint">
-            {stations.length === 0 ? (
-              t('map.emptyHint')
-            ) : (
-              <>
-                {t('map.legend')}
-                <strong>{t('map.legendStrong')}</strong>
-                {t('map.legendAfter')}
-              </>
-            )}
-          </p>
-          <MapContainer
-            key={`${mapCenter[0].toFixed(4)},${mapCenter[1].toFixed(4)}`}
-            center={mapCenter}
-            zoom={mapZoom}
-            style={{ height: 380, width: '100%' }}
-          >
-            <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-            {demoSitesOnMap.map((d) => (
-              <CircleMarker
-                key={`demo-${d.externalId}`}
-                center={[d.latitude, d.longitude]}
-                radius={7}
-                pathOptions={{
-                  color: '#64748b',
-                  fillColor: '#94a3b8',
-                  fillOpacity: 0.45,
-                  weight: 2,
-                  dashArray: '4 3',
-                }}
-              >
-                <Popup>
-                  <strong>{t('map.demoTitle')}</strong>
-                  <br />
-                  {d.name}
-                  <br />
-                  USGS：<code>{d.externalId}</code>
-                  <br />
-                  <span className="map-popup-muted">{t('map.demoNote')}</span>
-                </Popup>
-              </CircleMarker>
-            ))}
-            {stations.map((s) => (
-              <CircleMarker
-                key={s.stationId}
-                center={[s.latitude, s.longitude]}
-                radius={9}
-                pathOptions={registeredStationPathOptions(s)}
-                eventHandlers={{
-                  click: () => {
-                    void loadTrendForStation(s.stationId, s.stationName || s.stationCode)
-                  },
-                }}
-              >
-                <Popup>
-                  <strong>{s.stationName || s.stationCode}</strong>
-                  <br />
-                  <span className="map-popup-muted">
-                    {t('map.registeredLine')}
-                    {s.stationCode}
-                  </span>
-                  <br />
-                  {s.city || '-'} / {s.province || '-'}
-                  <br />
-                  {t('map.latestLevel')}
-                  {s.latestPollutionLevel || t('map.noLevelYet')}
-                  <br />
-                  {t('map.openAlerts')}
-                  {s.openAlertCount}
-                  <br />
-                  USGS：{s.externalId || '—'}
-                  <br />
-                  <span className="map-popup-muted">{t('map.popupNote')}</span>
-                  <button
-                    type="button"
-                    className="map-popup-trend-btn"
-                    onClick={(ev) => {
-                      ev.preventDefault()
-                      ev.stopPropagation()
-                      void loadTrendForStation(s.stationId, s.stationName || s.stationCode)
-                    }}
-                  >
-                    {t('map.popupTrendBtn')}
-                  </button>
-                </Popup>
-              </CircleMarker>
-            ))}
-          </MapContainer>
-        </div>
+      <section className="card analytics-trend-hint">
+        <h3 className="analytics-trend-hint__title">{t('analytics.historicalTitle')}</h3>
+        <p className="analytics-trend-hint__body">{t('analytics.trendSameAsDashboard')}</p>
+        <p className="analytics-trend-hint__link">
+          <Link to="/">{t('analytics.goDashboardForTrend')}</Link>
+        </p>
+      </section>
 
-        <div className="card trend-card">
-          <div className="trend-card-head">
-            <h3>{t('trend.title')}</h3>
-            {trendScopeStation != null && (
-              <button
-                type="button"
-                className="btn-secondary trend-reset-btn"
-                disabled={trendScopeLoading}
-                onClick={() => void loadTrendForStation(null, null)}
-              >
-                {t('trend.resetAll')}
-              </button>
-            )}
-          </div>
-          <p className="chart-caption trend-scope-caption">
-            {trendScopeStation != null ? (
-              <>
-                {t('trend.scopeStation')}
-                <strong>{trendScopeStation.label}</strong>（<code>stationId={trendScopeStation.stationId}</code>
-                {t('trend.scopeStationAfter')}
-              </>
-            ) : (
-              <>
-                <strong>{t('trend.scopeAllStrong')}</strong>
-                {t('trend.scopeAllAfter')}
-              </>
-            )}
-          </p>
-          <p className="chart-caption trend-legend-usgs">
-            <span className="trend-legend-group">
-              <strong>{t('trend.legFlow')}</strong>：
-              <span className="swatch swatch-flow-det" /> {t('trend.legFlowDet')}
-              <code>00060</code>
-              {t('trend.legFlowDetAfter')}
-              <span className="swatch swatch-flow-if" /> {t('trend.legFlowIf')}
-              <code>SITE_PARAM_IF_00060</code>
-              {t('trend.legFlowIfAfter')}
-            </span>
-            <span className="trend-legend-group">
-              <strong>{t('trend.legTurb')}</strong>：
-              <span className="swatch swatch-turb-det" /> {t('trend.legTurbDet')}
-              <code>63680</code>
-              {t('trend.legTurbDetAfter')}
-              <span className="swatch swatch-turb-anom" /> {t('trend.legTurbAnom')}
-              <code>63680</code>
-              {t('trend.legTurbAnomAfter')}
-            </span>
-            {trendScopeLoading ? <span className="trend-loading-inline">{t('trend.loading')}</span> : null}
-          </p>
-          <p className="chart-caption trend-data-scope-note">
-            {t('trend.dataNote')}
-            <code>GET /api/stats/trend</code>。
-            <strong>{t('trend.dataNoteStrong1')}</strong>
-            {t('trend.dataNoteMid')}
-            <strong>{t('trend.dataNoteStrong2')}</strong>
-            {t('trend.dataNoteAfter')}
-            <code>anomaly_available=false</code>
-            {t('trend.dataNoteAfter2')}
-          </p>
-          {trendScopeErr != null && <p className="trend-scope-err">{trendScopeErr}</p>}
-          {trendTotals != null && (
-            <p className="trend-totals-line forecast-muted">
-              {t('trend.totalsPrefix')}
-              <strong>{trendTotals.totalFlowDetectionCount}</strong>
-              {t('trend.totalsMid1')}
-              <strong>{trendTotals.totalFlowAnomalyCount}</strong>
-              {t('trend.totalsMid2')}
-              <strong>{trendTotals.totalTurbidityDetectionCount}</strong>
-              {t('trend.totalsMid3')}
-              <strong>{trendTotals.totalTurbidityAnomalyCount}</strong>
-              {' · '}
-              {t('trend.totalsAlerts')}
-              <strong>{trendTotals.totalAlertCount}</strong>
-              {trendScopeStation != null
-                ? `${t('trend.scopeStationParen')}${trendScopeStation.stationId}${t('trend.scopeStationCloseParen')}`
-                : t('trend.scopeAllParen')}
-            </p>
-          )}
-          {trendSeriesAllZero && trend.length > 0 && (
-            <p className="forecast-muted trend-zero-hint">
-              {trendScopeStation != null ? t('trend.zeroHintStation') : t('trend.zeroHintAll')}
-            </p>
-          )}
-          {trend.length === 0 ? (
-            <div className="chart-empty">
-              {trendScopeStation != null ? (
-                <>
-                  {t('trend.emptyStation')}
-                  {trendScopeStation.label}
-                  {t('trend.emptyStationAfter')}
-                </>
-              ) : (
-                <>{t('trend.emptyGlobal')}</>
-              )}
-            </div>
-          ) : (
-            <ResponsiveContainer width="100%" height={280}>
-              <LineChart
-                data={trendChartData}
-                margin={{ top: 8, right: 12, left: 4, bottom: 8 }}
-              >
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(148,163,184,0.25)" />
-                <XAxis dataKey="date" tick={{ fill: 'var(--wm-text-muted)', fontSize: 11 }} />
-                <YAxis
-                  allowDecimals={false}
-                  domain={[0, trendYAxisMax]}
-                  tick={{ fill: 'var(--wm-text-muted)', fontSize: 11 }}
-                />
-                <Tooltip
-                  contentStyle={{
-                    background: 'var(--wm-bg-elevated)',
-                    border: '1px solid var(--wm-border)',
-                    borderRadius: 8,
-                  }}
-                />
-                <Legend wrapperStyle={{ fontSize: 12 }} />
-                <Line
-                  type="linear"
-                  dataKey="flowDetectionCount"
-                  stroke="#38bdf8"
-                  strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 1, fill: '#38bdf8' }}
-                  activeDot={{ r: 5 }}
-                  isAnimationActive={false}
-                  name={t('trend.lineFlowDet')}
-                />
-                <Line
-                  type="linear"
-                  dataKey="flowAnomalyCount"
-                  stroke="#7dd3fc"
-                  strokeDasharray="6 4"
-                  strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 1, fill: '#7dd3fc' }}
-                  activeDot={{ r: 5 }}
-                  isAnimationActive={false}
-                  name={t('trend.lineFlowIf')}
-                />
-                <Line
-                  type="linear"
-                  dataKey="turbidityDetectionCount"
-                  stroke="#34d399"
-                  strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 1, fill: '#34d399' }}
-                  activeDot={{ r: 5 }}
-                  isAnimationActive={false}
-                  name={t('trend.lineTurbDet')}
-                />
-                <Line
-                  type="linear"
-                  dataKey="turbidityAnomalyCount"
-                  stroke="#6ee7b7"
-                  strokeDasharray="6 4"
-                  strokeWidth={2}
-                  dot={{ r: 3, strokeWidth: 1, fill: '#6ee7b7' }}
-                  activeDot={{ r: 5 }}
-                  isAnimationActive={false}
-                  name={t('trend.lineTurbAnom')}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-          )}
-        </div>
-
-        <div className="card">
+      <div className="card analytics-topn">
           <h3>{t('topN.title')}</h3>
           <p className="chart-caption">{t('topN.caption')}</p>
           <table>
@@ -1847,10 +2040,9 @@ function App() {
             </tbody>
           </table>
         </div>
-      </section>
 
-      <section className="card" aria-labelledby="heading-latest-alerts">
-        <h3 id="heading-latest-alerts">{t('alerts.latest')}</h3>
+      <section className="card" aria-labelledby="heading-latest-alerts-analytics">
+        <h3 id="heading-latest-alerts-analytics">{t('alerts.latest')}</h3>
         <div className="alert-table-wrap">
           <table className="alert-table">
             <thead>
@@ -1904,7 +2096,17 @@ function App() {
           path="/stations"
           element={
             <>
-              <section className="station-form">
+              <div className="stations-page-head">
+                <h2 className="stations-page-title">{t('stations.waterQualityTitle')}</h2>
+                <button
+                  type="button"
+                  className="btn-station-add"
+                  onClick={() => navigate('/stations#add')}
+                >
+                  {t('stations.addStationCta')}
+                </button>
+              </div>
+              <section className="station-form" id="station-form-anchor">
                 <h3>{t('stations.pageTitle')}</h3>
                 <p className="station-form-hint">{t('stations.hint')}</p>
                 {editingStationCode && (
@@ -1964,13 +2166,11 @@ function App() {
                       <table className="station-table">
                         <thead>
                           <tr>
-                            <th>stationCode</th>
-                            <th>stationName</th>
-                            <th>externalId（USGS）</th>
-                            <th>纬度</th>
-                            <th>经度</th>
-                            <th>最新等级</th>
-                            <th>未关闭告警</th>
+                            <th>{t('stations.colCode')}</th>
+                            <th>{t('stations.colName')}</th>
+                            <th>{t('stations.colLocation')}</th>
+                            <th>{t('stations.colStatus')}</th>
+                            <th>{t('stations.colAlerts')}</th>
                             <th>{t('stations.actions')}</th>
                           </tr>
                         </thead>
@@ -1978,23 +2178,31 @@ function App() {
                           {stations.map((s) => (
                             <tr key={s.stationId}>
                               <td>
-                                <code>{s.stationCode}</code>
+                                <code className="station-code-chip">{s.stationCode}</code>
                               </td>
                               <td>{s.stationName || '—'}</td>
-                              <td>
-                                <code>{s.externalId || '—'}</code>
+                              <td className="station-loc-cell">
+                                {s.latitude.toFixed(4)}, {s.longitude.toFixed(4)}
                               </td>
-                              <td>{s.latitude}</td>
-                              <td>{s.longitude}</td>
-                              <td>{s.latestPollutionLevel || '—'}</td>
-                              <td>{s.openAlertCount}</td>
+                              <td>
+                                <span className={statusPillClass(s.latestPollutionLevel)}>
+                                  {s.latestPollutionLevel || '—'}
+                                </span>
+                              </td>
+                              <td
+                                className={
+                                  s.openAlertCount > 0 ? 'station-alerts--hot' : 'station-alerts--none'
+                                }
+                              >
+                                {s.openAlertCount > 0 ? s.openAlertCount : t('stations.alertsNone')}
+                              </td>
                               <td className="station-table-actions">
                                 <button
                                   type="button"
-                                  className="btn-table"
+                                  className="btn-table btn-table-primary"
                                   onClick={() => loadStationForEdit(s)}
                                 >
-                                  {t('stations.edit')}
+                                  {t('stations.viewDetails')}
                                 </button>
                                 <button
                                   type="button"

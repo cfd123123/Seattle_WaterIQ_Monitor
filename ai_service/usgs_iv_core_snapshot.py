@@ -13,7 +13,7 @@ from typing import Any
 import joblib
 import pandas as pd
 
-from usgs_iv_to_predict_payload import load_iv_csv
+from iv_csv_io import load_iv_csv
 
 CORE_PARAMS: tuple[str, ...] = ("00010", "00400", "00300", "00095", "63680")
 

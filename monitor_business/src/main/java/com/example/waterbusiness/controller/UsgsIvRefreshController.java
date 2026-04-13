@@ -25,7 +25,7 @@ public class UsgsIvRefreshController {
     @Operation(
             summary = "Manually refresh IV CSV",
             description = "Pulls from NWIS and **overwrites** ai_service/data/usgs_puget_iv.csv for the last N days."
-                    + " Optionally runs the same persist/alert flow as /api/check for **new (site_no,datetime) rows** vs the old file (≤100 rows per batch)."
+                    + " Optionally runs turbidity threshold scan after refresh."
     )
     public ApiResponse<UsgsIvRefreshResultDto> refresh(
             @Valid @RequestBody(required = false) UsgsIvRefreshRequest request

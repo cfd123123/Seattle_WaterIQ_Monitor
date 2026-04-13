@@ -33,4 +33,8 @@ public class StatsOverviewResponse {
     private long last7DaysAlertCount;
     @Schema(description = "Last 7 days AI failures (incl. today)", example = "2")
     private long last7DaysAiFailureCount;
+    @Schema(description = "Current JVM uptime in seconds", example = "86400")
+    private long uptimeSeconds;
+    @Schema(description = "Rolling 30-day availability percentage (0-100)", example = "99.8")
+    private double uptimePercent30d;
 }

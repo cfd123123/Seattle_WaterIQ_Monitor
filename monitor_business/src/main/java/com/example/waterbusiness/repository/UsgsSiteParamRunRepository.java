@@ -8,6 +8,8 @@ import java.util.List;
 
 public interface UsgsSiteParamRunRepository extends JpaRepository<UsgsSiteParamRun, Long> {
 
+    long countByCreatedAtGreaterThanEqualAndCreatedAtLessThan(LocalDateTime from, LocalDateTime toExclusive);
+
     List<UsgsSiteParamRun> findByCreatedAtGreaterThanEqualAndCreatedAtLessThan(
             LocalDateTime from,
             LocalDateTime toExclusive

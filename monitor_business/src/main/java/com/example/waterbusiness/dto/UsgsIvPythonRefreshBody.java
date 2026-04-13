@@ -19,9 +19,6 @@ public class UsgsIvPythonRefreshBody {
 
     private int days;
 
-    @JsonProperty("include_latest_check_payloads")
-    private boolean includeLatestCheckPayloads;
-
     /** Merged with IV config sites, deduped, then fetch from NWIS (USGS ids from registered stations). */
     @JsonProperty("extra_site_nos")
     private List<String> extraSiteNos;

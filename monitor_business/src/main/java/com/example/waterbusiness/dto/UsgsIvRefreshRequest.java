@@ -18,8 +18,7 @@ public class UsgsIvRefreshRequest {
     private Integer days;
 
     @Schema(
-            description = "When true: after refresh, batch detect/persist latest row per USGS site (including threshold alerts);"
-                    + " stationCode is attached only when monitor_station.external_id matches site_no"
+            description = "When true: after CSV refresh, run turbidity threshold scan (same as standalone scan endpoint)"
     )
     private Boolean runChecksAfterRefresh;
 }

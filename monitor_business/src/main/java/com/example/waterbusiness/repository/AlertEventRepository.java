@@ -10,8 +10,25 @@ import org.springframework.data.domain.Pageable;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 
 public interface AlertEventRepository extends JpaRepository<AlertEvent, Long>, JpaSpecificationExecutor<AlertEvent> {
+
+    Optional<AlertEvent> findFirstByStationIdOrderByCreatedAtDesc(Long stationId);
+
+    @Query("select e.pollutionLevel, count(e) from AlertEvent e where e.pollutionLevel is not null group by e.pollutionLevel")
+    List<Object[]> countByPollutionLevelAll();
+
+    @Query("""
+            select e.pollutionLevel, count(e)
+            from AlertEvent e
+            where e.createdAt >= :from and e.createdAt < :toExclusive and e.pollutionLevel is not null
+            group by e.pollutionLevel
+            """)
+    List<Object[]> countByPollutionLevelBetween(
+            @Param("from") LocalDateTime from,
+            @Param("toExclusive") LocalDateTime toExclusive
+    );
 
     @Modifying(clearAutomatically = true, flushAutomatically = true)
     long deleteByRemark(String remark);

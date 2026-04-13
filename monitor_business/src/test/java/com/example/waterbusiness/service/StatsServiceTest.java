@@ -5,7 +5,6 @@ import com.example.waterbusiness.repository.AlertEventRepository;
 import com.example.waterbusiness.repository.ModelCallLogRepository;
 import com.example.waterbusiness.repository.MonitorStationRepository;
 import com.example.waterbusiness.repository.UsgsSiteParamRunRepository;
-import com.example.waterbusiness.repository.WaterQualityRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,17 +20,16 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 class StatsServiceTest {
 
     @Mock
-    private WaterQualityRepository waterQualityRepository;
+    private UsgsSiteParamRunRepository usgsSiteParamRunRepository;
+
     @Mock
     private AlertEventRepository alertEventRepository;
+
     @Mock
     private ModelCallLogRepository modelCallLogRepository;
 
     @Mock
     private MonitorStationRepository monitorStationRepository;
-
-    @Mock
-    private UsgsSiteParamRunRepository usgsSiteParamRunRepository;
 
     private StatsService statsService;
 
@@ -40,9 +38,8 @@ class StatsServiceTest {
         StatsProperties statsProperties = new StatsProperties();
         statsProperties.setMaxRangeDays(365);
         statsService = new StatsService(
-                waterQualityRepository,
-                alertEventRepository,
                 usgsSiteParamRunRepository,
+                alertEventRepository,
                 modelCallLogRepository,
                 monitorStationRepository,
                 statsProperties

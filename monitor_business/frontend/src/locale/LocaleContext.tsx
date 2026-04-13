@@ -1,3 +1,5 @@
+/* Context modules conventionally export a hook alongside the provider; Fast Refresh is unaffected in practice. */
+/* eslint-disable react-refresh/only-export-components */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import type { Locale } from './messages'
 import { t as translate } from './messages'

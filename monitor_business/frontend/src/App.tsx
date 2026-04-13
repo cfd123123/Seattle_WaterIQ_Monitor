@@ -1,5 +1,5 @@
 import axios, { isAxiosError } from 'axios'
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   CartesianGrid,
   Legend,
@@ -398,6 +398,14 @@ function formatDateISO(d: Date): string {
   return d.toISOString().slice(0, 10)
 }
 
+function build7dTrendPath(stationId: number | null): string {
+  const now = new Date()
+  const from = new Date(now)
+  from.setDate(now.getDate() - 6)
+  const q = `from=${formatDateISO(from)}&to=${formatDateISO(now)}&granularity=day`
+  return stationId == null ? `/stats/trend?${q}` : `/stats/trend?${q}&stationId=${stationId}`
+}
+
 type Theme = 'dark' | 'light'
 
 function App() {
@@ -525,7 +533,7 @@ function App() {
     [trendChartData]
   )
 
-  function applyTrendApiData(body: StatsTrendApiData | undefined) {
+  const applyTrendApiData = useCallback((body: StatsTrendApiData | undefined) => {
     setTrend(body?.series ?? body?.points ?? [])
     setTrendTotals({
       totalAlertCount: body?.totalAlertCount ?? 0,
@@ -534,7 +542,7 @@ function App() {
       totalTurbidityDetectionCount: body?.totalTurbidityDetectionCount ?? 0,
       totalTurbidityAnomalyCount: body?.totalTurbidityAnomalyCount ?? 0,
     })
-  }
+  }, [])
 
   const forecastTrend = useMemo(() => {
     if (!forecastResult?.forecast_available) return []
@@ -557,14 +565,6 @@ function App() {
     )
     return rows
   }, [forecastResult])
-
-  function build7dTrendPath(stationId: number | null): string {
-    const now = new Date()
-    const from = new Date(now)
-    from.setDate(now.getDate() - 6)
-    const q = `from=${formatDateISO(from)}&to=${formatDateISO(now)}&granularity=day`
-    return stationId == null ? `/stats/trend?${q}` : `/stats/trend?${q}&stationId=${stationId}`
-  }
 
   async function loadTrendForStation(stationId: number | null, label: string | null) {
     setTrendScopeLoading(true)
@@ -652,7 +652,7 @@ function App() {
     }
   }
 
-  async function refreshAll() {
+  const refreshAll = useCallback(async () => {
     setLoading(true)
     setError(null)
     setTrendScopeStation(null)
@@ -682,7 +682,7 @@ function App() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [locale, applyTrendApiData])
 
   async function refreshIvCsv() {
     const d = Number(ivRefreshDays.trim())
@@ -885,7 +885,7 @@ function App() {
 
   useEffect(() => {
     void refreshAll()
-  }, [])
+  }, [refreshAll])
 
   /** Demo grey points hidden when a registered station uses the same USGS externalId. */
   const demoSitesOnMap = useMemo(() => {

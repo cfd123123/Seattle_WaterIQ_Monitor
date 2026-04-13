@@ -465,3 +465,26 @@ html[data-theme='light'] .anomaly-from-iv-btn {
   height: 2px !important;
   margin-top: 1px;
 }
+
+/* Figma-style nav (dark theme): active pill */
+html[data-theme='dark'] .app-nav--pill .app-nav__link.active {
+  background: var(--wm-accent-dim);
+  color: var(--wm-accent);
+  border-color: var(--wm-border-strong);
+}
+
+html[data-theme='dark'] .header-logo {
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--wm-accent);
+  border: 1px solid var(--wm-border-subtle);
+}
+
+html[data-theme='dark'] .btn-station-add {
+  background: linear-gradient(
+    180deg,
+    rgba(52, 211, 153, 0.35),
+    rgba(52, 211, 153, 0.15)
+  ) !important;
+  color: var(--wm-text-strong) !important;
+  border-color: var(--wm-border-strong) !important;
+}

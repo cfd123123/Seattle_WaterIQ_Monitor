@@ -1,6 +1,5 @@
 package com.example.waterbusiness.dto;
 
-import com.fasterxml.jackson.annotation.JsonAlias;
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import io.swagger.v3.oas.annotations.media.Schema;
@@ -35,13 +34,6 @@ public class UsgsIvRefreshResponse {
     private String mode;
 
     @JsonProperty("incremental_rows_new")
-    @Schema(description = "New (site_no,datetime) rows vs old CSV, for batch checks")
+    @Schema(description = "Optional row-diff hint from Python")
     private Integer incrementalRowsNew;
-
-    /**
-     * Rows in diff vs IV file before overwrite; legacy key latest_check_payloads accepted.
-     */
-    @JsonProperty("incremental_check_payloads")
-    @JsonAlias("latest_check_payloads")
-    private List<UsgsIvLatestCheckItem> incrementalCheckPayloads;
 }

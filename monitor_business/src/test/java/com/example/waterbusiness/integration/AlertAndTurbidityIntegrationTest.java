@@ -1,6 +1,5 @@
 package com.example.waterbusiness.integration;
 
-import com.example.waterbusiness.client.WaterAIClient;
 import com.example.waterbusiness.client.WaterAiMaintenanceClient;
 import com.example.waterbusiness.client.WaterForecastClient;
 import com.example.waterbusiness.dto.SitesWith63680Request;
@@ -74,9 +73,6 @@ class AlertAndTurbidityIntegrationTest {
 
     @Autowired
     private MonitorStationRepository monitorStationRepository;
-
-    @MockBean
-    private WaterAIClient waterAIClient;
 
     @MockBean
     private WaterAiMaintenanceClient waterAiMaintenanceClient;

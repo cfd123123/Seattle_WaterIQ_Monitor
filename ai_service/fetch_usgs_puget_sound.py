@@ -116,7 +116,6 @@ def run_fetch(
     days: int = 30,
     parameters: str | None = None,
     out: Path | None = None,
-    include_latest_check_payloads: bool = False,
     extra_site_nos: list[str] | None = None,
 ) -> dict[str, Any]:
     """
@@ -184,14 +183,6 @@ def run_fetch(
         "out": str(out_path.resolve()),
         "mode": "overwrite",
     }
-    if include_latest_check_payloads:
-        from usgs_iv_to_predict_payload import incremental_check_bundles, iv_row_keys_from_csv
-
-        old_keys = iv_row_keys_from_csv(out_path)
-        payloads = incremental_check_bundles(merged, old_keys)
-        meta["incremental_check_payloads"] = payloads
-        meta["incremental_rows_new"] = len(payloads)
-
     merged.to_csv(out_path, index=False)
     return meta
 
@@ -236,7 +227,6 @@ def main(argv: list[str] | None = None) -> int:
             days=args.days,
             parameters=args.parameters,
             out=args.out,
-            include_latest_check_payloads=False,
         )
     except ValueError as e:
         print(str(e), file=sys.stderr)

@@ -9,7 +9,7 @@ import 'leaflet/dist/leaflet.css'
 
 {
   const saved = localStorage.getItem('water-theme')
-  document.documentElement.dataset.theme = saved === 'light' ? 'light' : 'dark'
+  document.documentElement.dataset.theme = saved === 'light' || saved === 'dark' ? saved : 'light'
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

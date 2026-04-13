@@ -9,18 +9,17 @@ import com.example.waterbusiness.dto.StatsStationAlertTopItem;
 import com.example.waterbusiness.dto.StatsStationAlertTopResponse;
 import com.example.waterbusiness.entity.AlertEvent;
 import com.example.waterbusiness.entity.UsgsSiteParamRun;
-import com.example.waterbusiness.entity.ModelCallLog;
 import com.example.waterbusiness.repository.AlertEventRepository;
 import com.example.waterbusiness.repository.ModelCallLogRepository;
 import com.example.waterbusiness.repository.MonitorStationRepository;
 import com.example.waterbusiness.repository.UsgsSiteParamRunRepository;
-import com.example.waterbusiness.repository.WaterQualityRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.lang.management.ManagementFactory;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
@@ -39,9 +38,8 @@ public class StatsService {
     private static final String FORECAST_ALERT_TYPE = "FORECAST_THRESHOLD";
     private static final String FORECAST_RULE_CODE = "FORECAST_PARAM_THRESHOLD_V1";
 
-    private final WaterQualityRepository waterQualityRepository;
-    private final AlertEventRepository alertEventRepository;
     private final UsgsSiteParamRunRepository usgsSiteParamRunRepository;
+    private final AlertEventRepository alertEventRepository;
     private final ModelCallLogRepository modelCallLogRepository;
     private final MonitorStationRepository monitorStationRepository;
     private final StatsProperties statsProperties;
@@ -52,18 +50,23 @@ public class StatsService {
         LocalDateTime todayStart = today.atStartOfDay();
         LocalDateTime tomorrowStart = today.plusDays(1).atStartOfDay();
         LocalDateTime last7DaysStart = today.minusDays(6).atStartOfDay();
+        long uptimeSeconds = ManagementFactory.getRuntimeMXBean().getUptime() / 1000L;
+        double uptimePercent30d = Math.min(100.0, (uptimeSeconds * 100.0) / (30.0 * 24.0 * 3600.0));
+        uptimePercent30d = Math.round(uptimePercent30d * 10.0) / 10.0;
 
         return StatsOverviewResponse.builder()
-                .totalCheckCount(waterQualityRepository.count())
+                .totalCheckCount(usgsSiteParamRunRepository.count())
                 .totalAlertCount(alertEventRepository.count())
                 .totalAiFailureCount(modelCallLogRepository.countBySuccessIsFalse())
                 .openAlertCount(alertEventRepository.countByStatusIn(new ArrayList<>(OPEN_ALERT_STATUSES)))
-                .todayCheckCount(waterQualityRepository.countByCreateTimeGreaterThanEqualAndCreateTimeLessThan(todayStart, tomorrowStart))
+                .todayCheckCount(usgsSiteParamRunRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThan(todayStart, tomorrowStart))
                 .todayAlertCount(alertEventRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThan(todayStart, tomorrowStart))
                 .todayAiFailureCount(modelCallLogRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThanAndSuccessIsFalse(todayStart, tomorrowStart))
-                .last7DaysCheckCount(waterQualityRepository.countByCreateTimeGreaterThanEqualAndCreateTimeLessThan(last7DaysStart, tomorrowStart))
+                .last7DaysCheckCount(usgsSiteParamRunRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThan(last7DaysStart, tomorrowStart))
                 .last7DaysAlertCount(alertEventRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThan(last7DaysStart, tomorrowStart))
                 .last7DaysAiFailureCount(modelCallLogRepository.countByCreatedAtGreaterThanEqualAndCreatedAtLessThanAndSuccessIsFalse(last7DaysStart, tomorrowStart))
+                .uptimeSeconds(uptimeSeconds)
+                .uptimePercent30d(uptimePercent30d)
                 .build();
     }
 
@@ -81,12 +84,12 @@ public class StatsService {
         List<Object[]> pollutionRows;
         List<Object[]> severityRows;
         if (from == null) {
-            pollutionRows = waterQualityRepository.countByPollutionLevelAll();
+            pollutionRows = alertEventRepository.countByPollutionLevelAll();
             severityRows = alertEventRepository.countBySeverityAll();
         } else {
             LocalDateTime fromTime = from.atStartOfDay();
             LocalDateTime toExclusive = to.plusDays(1).atStartOfDay();
-            pollutionRows = waterQualityRepository.countByPollutionLevelBetween(fromTime, toExclusive);
+            pollutionRows = alertEventRepository.countByPollutionLevelBetween(fromTime, toExclusive);
             severityRows = alertEventRepository.countBySeverityBetween(fromTime, toExclusive);
         }
 

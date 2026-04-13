@@ -1,97 +1,37 @@
 """
-FastAPI service: water-quality rule scoring, USGS IV short-horizon forecast, and IV maintenance.
+FastAPI service: USGS IV short-horizon forecast, IV maintenance, anomaly helpers, and turbidity batch reads.
 
-- Rule scoring (`POST /predict`) uses ``rule_scoring`` for Pollution_Level (optional legacy RF via ``USE_LEGACY_MODEL=1``).
-- Short-horizon forecast: ``POST /forecast``, ``POST /forecast/series`` (``forecast_engine``).
 - IV CSV refresh: ``POST /refresh/usgs-iv`` overwrites ``data/usgs_puget_iv.csv``.
+- Short-horizon forecast: ``POST /forecast``, ``POST /forecast/series`` (``forecast_engine``).
 """
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
-import joblib
-import pandas as pd
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
 from fetch_usgs_puget_sound import run_fetch
 from usgs_site_verify import nwis_site_verify_json
 from forecast_engine import forecast_from_iv_csv, forecast_series_from_iv_csv
-from rule_scoring import evaluate_water_quality_rules
 from usgs_iv_core_snapshot import latest_complete_core_snapshot
 from site_param_anomaly_on_demand import site_param_anomaly_from_iv_csv
 from turbidity_threshold_iv import site_nos_with_nonnull_63680, turbidity_threshold_batch_sites
 
-# Feature column names aligned with training CSV / Java WaterQualityRequest (legacy RF path).
-FEATURES = [
-    "Water_Temperature_C",
-    "pH",
-    "Dissolved_Oxygen_mg_L",
-    "Conductivity_uS_cm",
-    "Turbidity_NTU",
-    "Nitrate_mg_L",
-    "Ammonia_N_mg_L",
-    "Total_Phosphorus_mg_L",
-    "COD_mg_L",
-    "BOD_mg_L",
-    "Heavy_Metals_Pb_ug_L",
-]
-
-MODEL_PATH = "water_model.pkl"
-ENCODER_PATH = "label_encoder.pkl"
-
-_USE_LEGACY = os.environ.get("USE_LEGACY_MODEL", "").strip().lower() in ("1", "true", "yes")
-_model: Any = None
-_label_encoder: Any = None
-
-if _USE_LEGACY:
-    _model = joblib.load(MODEL_PATH)
-    _label_encoder = joblib.load(ENCODER_PATH)
-
-app = FastAPI(title="Water Quality Scoring, Forecast & Legacy Predict")
+app = FastAPI(title="USGS IV Forecast & Maintenance")
 
 _DEFAULT_IV_CSV = Path(__file__).resolve().parent / "data" / "usgs_puget_iv.csv"
 
 
-class PredictRequest(BaseModel):
-    """Single predict payload: 11 metrics; field names match Java ``WaterQualityRequest`` / training CSV."""
-
-    Water_Temperature_C: float
-    pH: float
-    Dissolved_Oxygen_mg_L: float
-    Conductivity_uS_cm: float
-    Turbidity_NTU: float
-    Nitrate_mg_L: float
-    Ammonia_N_mg_L: float
-    Total_Phosphorus_mg_L: float
-    COD_mg_L: float
-    BOD_mg_L: float
-    Heavy_Metals_Pb_ug_L: float
-    observed_fields: list[str] | None = Field(
-        default=None,
-        description="Optional list of observed metric field names; omit to treat all 11 as observed (coverage=1).",
-    )
-
-
 class HealthResponse(BaseModel):
     status: Literal["ok"]
-    mode: Literal["rules", "legacy_model"]
 
 
 class UsgsIvRefreshRequest(BaseModel):
-    """
-    Refresh IV CSV: pull from NWIS for the last ``days`` and **overwrite** the default path (no append).
-    If ``include_latest_check_payloads`` is True, response includes incremental check payloads for new
-    ``(site_no, datetime)`` rows vs the previous file (for Java batch ``/api/check``); if no old file, one row per line in window.
-    """
+    """Refresh IV CSV: pull from NWIS for the last ``days`` and **overwrite** the default path (no append)."""
 
     days: int = Field(default=30, ge=1, le=90, description="Lookback days (max 90 to cap size).")
-    include_latest_check_payloads: bool = Field(
-        default=False,
-        description="Include incremental_check_payloads (diff vs file before overwrite; full window if no prior file).",
-    )
     extra_site_nos: list[str] | None = Field(
         default=None,
         description="Extra USGS site numbers (e.g. registered external_id) merged with config list before fetch.",
@@ -192,7 +132,6 @@ def refresh_usgs_iv(
     try:
         return run_fetch(
             days=eff.days,
-            include_latest_check_payloads=eff.include_latest_check_payloads,
             extra_site_nos=eff.extra_site_nos,
         )
     except ValueError as e:
@@ -208,7 +147,7 @@ def refresh_usgs_iv(
 def forecast(body: ForecastRequest) -> dict[str, Any]:
     """
     Lagged Ridge on hourly series for one site and one ``parameter_cd``; recursive ``horizon_hours``-step forecast.
-    Independent of 11-parameter rules; sets ``forecast_available=false`` when history is insufficient.
+    Sets ``forecast_available=false`` when history is insufficient.
     """
     csv_path = _resolve_iv_csv(body.iv_csv_path)
     return forecast_from_iv_csv(
@@ -267,33 +206,14 @@ def usgs_iv_sites_with_63680(
 
 @app.get("/health", response_model=HealthResponse)
 def health() -> HealthResponse:
-    mode: Literal["rules", "legacy_model"] = "legacy_model" if _USE_LEGACY else "rules"
-    return HealthResponse(status="ok", mode=mode)
-
-
-@app.post("/predict")
-def predict(payload: PredictRequest) -> dict[str, Any]:
-    """
-    Return ``Pollution_Level`` (Java contract); rule mode adds score, rule_version, subscores, coverage.
-    Legacy RF mode returns only ``Pollution_Level``.
-    """
-    data = payload.model_dump()
-    observed = data.pop("observed_fields", None)
-    feature_row = {k: data[k] for k in FEATURES}
-    if _USE_LEGACY and _model is not None and _label_encoder is not None:
-        row = pd.DataFrame([feature_row], columns=FEATURES)
-        y_pred = _model.predict(row)
-        pollution_level = _label_encoder.inverse_transform(y_pred)[0]
-        return {"Pollution_Level": str(pollution_level)}
-
-    return evaluate_water_quality_rules(feature_row, observed_fields=observed)
+    return HealthResponse(status="ok")
 
 
 @app.post("/usgs/iv/latest-core-params")
 def usgs_iv_latest_core_params(body: UsgsIvLatestCoreRequest) -> dict[str, Any]:
     """
     Latest IV row per site where 00010/00400/00300/00095/63680 are all present.
-    Used by Java to build payloads; returns 400 if data incomplete.
+    Returns 400 if data incomplete.
     """
     csv_path = _resolve_iv_csv(body.iv_csv_path)
     try:

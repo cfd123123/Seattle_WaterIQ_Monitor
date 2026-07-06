@@ -1,62 +1,62 @@
-# 水质与环境监测平台
+# Water Quality & Environmental Monitoring Platform
 
-面向运营与技术的 **监测数据接入、短时预测、告警与站点管理** 的一体化工程。典型数据场景为 **USGS NWIS 瞬时水质（IV）**（如 Puget Sound 一带站点）；架构上站点与参数可扩展。
-
----
-
-## 需求与能力
-
-### 1. 预测系统
-
-**目标**：在已知历史 IV 时间序列的前提下，为指定站点、指定参数给出 **未来若干小时** 的数值趋势，供值班与研判使用（**辅助决策**，不替代官方水文预报）。
-
-**实现要点**：
-
-- **数据**：以合并后的 USGS **IV CSV**（站点、时间、多参数列）为主；按 `site_no`、`parameter_cd`（如流量 `00060`、浊度 `63680`）构建 **小时序列**。
-- **模型**：线上 MVP 以 **滞后特征 + Ridge 递归多步外推** 为主（`ai_service` / `forecast_engine`）；仓库内另有 **LightGBM 直接多步** 等实验与调参脚本（walk-forward、sMAPE），用于研究与选型。
-- **输出**：预测值、**可用性**（历史不足等情况下标记不可用）、可选带历史窗口的序列，便于前端作图。
-- **集成**：业务后端通过 HTTP 调用 **Python AI 服务（FastAPI）**，在独立进程中完成预测与 IV 相关维护，避免拖垮业务 API。
-
-### 2. 告警系统
-
-**目标**：基于实时或准实时 IV，在规则与模型辅助下发现 **异常或超阈**，产生 **可确认、可关闭** 的告警，并支持列表、筛选与后续统计/地图展示。
-
-**实现要点**：
-
-- **来源示例**：**浊度双点阈值** 扫描、**单站点单参数** 异常检测（如 Isolation Forest 按需判定）；可与预测或业务规则组合（以实际启用的规则码为准）。
-- **生命周期**：告警 **新建 → 确认 → 关闭**，落库可追溯，与站点、参数、巡检/运行记录等关联。
-- **与预测分工**：预测侧重 **趋势预判**；告警侧重 **越界/异常**；二者可配合，职责分离。
-- **重任务**：IV 全量刷新、批量预测等可走 **异步任务**，避免阻塞在线读写。
-
-### 其他：站点与基础能力
-
-- **站点管理**：**新增 / 编辑 / 删除（或停用）** 监测站点；维护编码、展示名、地理位置、可选外部 ID（如 USGS 8 位站号）；支持与 NWIS **站点校验**（若已接入）。
-- **数据维护**：从 NWIS **拉取并合并 IV**、更新本地数据文件；支持默认站点配置与扩展站点列表。
-- **总览**：统计总览、分布与趋势、**地图** 上的站点与告警摘要等（管理台）。
-- **工程形态**：前后端分离、可选 **API 网关** 与 **Docker Compose** 编排、可观测性组件（详见 `monitor_business` 下文档）。
+An integrated system for **monitoring data ingestion, short-horizon forecasting, alerting, and station management** for operations and engineering teams. The typical data scenario is **USGS NWIS instantaneous values (IV)** (e.g., Puget Sound area sites); the architecture supports extensible sites and parameters.
 
 ---
 
-## 仓库结构（简要）
+## Requirements & Capabilities
 
-| 目录 | 说明 |
-|------|------|
-| `ai_service/` | Python：FastAPI、IV 维护、预测、阈值与异常等推理与工具脚本 |
-| `monitor_business/` | 业务后端（Spring Boot）、前端（Vite + React）、网关与编排文档 |
+### 1. Forecasting
 
-更细的本地启动、Docker 与分阶段说明见：**[monitor_business/README.md](./monitor_business/README.md)** 与 **[monitor_business/docs/主要业务.md](./monitor_business/docs/主要业务.md)**。
+**Goal**: Given historical IV time series, produce **multi-hour ahead** value trends for a specified site and parameter to support shift review and situational awareness (**decision support** — not a replacement for official hydrologic forecasts).
+
+**Implementation highlights**:
+
+- **Data**: Merged USGS **IV CSV** (site, time, multi-parameter columns); build **hourly series** by `site_no` and `parameter_cd` (e.g., discharge `00060`, turbidity `63680`).
+- **Models**: Production MVP uses **lag features + Ridge recursive multi-step extrapolation** (`ai_service` / `forecast_engine`); the repo also includes **LightGBM direct multi-step** experiments and tuning scripts (walk-forward, sMAPE) for research and model selection.
+- **Output**: Forecast values, **availability** flags (e.g., insufficient history), and optional series with a historical window for charting.
+- **Integration**: The business backend calls the **Python AI service (FastAPI)** over HTTP for forecasting and IV maintenance in a separate process, keeping the business API responsive.
+
+### 2. Alerting
+
+**Goal**: Detect **anomalies or threshold breaches** from real-time or near-real-time IV using rules and model assistance; produce **acknowledgeable, closable** alerts with list, filter, and optional stats/map views.
+
+**Implementation highlights**:
+
+- **Example sources**: **Dual-point turbidity thresholds**, **single-site single-parameter** anomaly detection (e.g., on-demand Isolation Forest); can combine with forecasts or business rules (per enabled rule codes).
+- **Lifecycle**: Alerts flow **new → acknowledged → closed**, persisted for audit and linked to sites, parameters, and inspection/run records.
+- **Division of labor**: Forecasting emphasizes **trend anticipation**; alerting emphasizes **breach/anomaly**; the two complement each other with clear responsibilities.
+- **Heavy jobs**: Full IV refresh, batch forecasting, etc. can run as **async tasks** to avoid blocking online reads/writes.
+
+### Other: Stations & Foundation
+
+- **Station management**: **Create / edit / delete (or deactivate)** monitoring sites; maintain codes, display names, geo location, optional external IDs (e.g., USGS 8-digit site numbers); optional NWIS **site validation** when integrated.
+- **Data maintenance**: Pull and merge IV from NWIS into local data files; default site config and extensible site lists.
+- **Overview**: Stats dashboard, distribution and trends, **map** summaries for sites and alerts (admin console).
+- **Engineering layout**: Separated frontend/backend, optional **API gateway** and **Docker Compose** orchestration, observability stack (see docs under `monitor_business`).
+
+---
+
+## Repository Layout (Brief)
+
+| Directory | Description |
+|-----------|-------------|
+| `ai_service/` | Python: FastAPI, IV maintenance, forecasting, thresholds, anomaly inference, and utility scripts |
+| `monitor_business/` | Business backend (Spring Boot), frontend (Vite + React), gateway, and orchestration docs |
+
+For local startup, Docker, and phased rollout details, see **[monitor_business/README.md](./monitor_business/README.md)** and **[monitor_business/BUSINESS.md](./monitor_business/BUSINESS.md)** (business overview).
 
 ---
 
 ## For reviewers / HR
 
-面向招聘方与技术审阅的 **几乎零成本** 演示说明（公开 GitHub、2 分钟录屏脚本、截图目录、哪些功能无需 LLM）见 **[DEMO.md](./DEMO.md)**。
+A **near-zero-cost** demo guide for recruiters and technical reviewers (public GitHub, 2-minute screen-recording script, screenshot folder, features that work without an LLM) is in **[DEMO.md](./DEMO.md)**.
 
-| 资源 | 说明 |
-|------|------|
-| [DEMO.md](./DEMO.md) | 中文主文档 + 英文小节标题；安全推送清单 |
-| `docs/screenshots/` | 建议放置 3–5 张管理台截图（预测页、Copilot、告警/地图） |
-| 演示视频（可选） | 在 DEMO §3 按脚本录制后，将链接填在本表或 DEMO 文末 |
+| Resource | Description |
+|----------|-------------|
+| [DEMO.md](./DEMO.md) | Reviewer demo guide and safe push checklist |
+| `docs/screenshots/` | Suggested 3–5 admin-console screenshots (forecast page, Copilot, alerts/map) |
+| Demo video (optional) | Record per DEMO §3, then add the link in this table or at the end of DEMO |
 
-**无需 LLM 即可验收**：Docker Compose 启动后的 **预测曲线、浊度监控、告警与地图**。  
-**Copilot / AI 解释** 需本机 [Ollama](https://ollama.com) 或自备 API Key（见 `ai_service/.env.example`）。
+**Verifiable without an LLM**: After Docker Compose startup — **forecast curves**, **turbidity monitoring**, **alerts and map**.  
+**Copilot / AI explanations** require local [Ollama](https://ollama.com) or your own API key (see `ai_service/.env.example`).

@@ -1,66 +1,65 @@
-# HR / 审阅者演示指南 · Reviewer Demo Guide
+# Reviewer Demo Guide
 
-面向 **招聘方、技术审阅、课程作业评分** 的 **几乎零成本（$0）** 公开演示路径。  
-English section headers below; body is Chinese-first for local HR workflows.
-
----
-
-## 1. 方案概览 · Overview ($0 path)
-
-| 项目 | 建议 |
-|------|------|
-| 代码托管 | **GitHub 公开仓库**（免费） |
-| 运行环境 | 本机 **Docker Compose**（见 `monitor_business/docker-compose.yml`） |
-| 演示视频 | **2 分钟** 屏幕录制（见 §3），上传 YouTube **未列出** 或 B 站，链接写在 README |
-| 静态截图 | 仓库内 `docs/screenshots/`（见 §4） |
-| LLM（Copilot） | **可选**：本机 **Ollama**（免费）或 README 中说明「需自备 API Key」 |
-
-**不花钱也能展示的核心能力**：USGS 数据拉取、短时预测曲线、浊度状态/告警、管理台地图与统计。  
-**需要 LLM 的能力**：右下角 **Copilot 问答**、浊度风险 **AI 文字解释**（无 LLM 时接口会降级或提示未配置）。
+A **near-zero-cost ($0)** public demo path for **recruiters, technical reviewers, and course evaluators**.
 
 ---
 
-## 2. 审阅者 5 分钟快速路径 · Quick path for reviewers
+## 1. Overview ($0 path)
 
-### 2.1 克隆与启动 · Clone & run
+| Item | Recommendation |
+|------|----------------|
+| Code hosting | **Public GitHub repository** (free) |
+| Runtime | Local **Docker Compose** (see `monitor_business/docker-compose.yml`) |
+| Demo video | **2-minute** screen recording (see §3); upload to YouTube **unlisted** or Bilibili; link from README |
+| Static screenshots | `docs/screenshots/` in the repo (see §4) |
+| LLM (Copilot) | **Optional**: local **Ollama** (free) or note in README that an API key is required |
+
+**Core capabilities you can show without spending money**: USGS data pull, short-horizon forecast curves, turbidity state/alerts, admin map and statistics.  
+**Capabilities that need an LLM**: **Copilot Q&A** in the bottom-right corner, turbidity risk **AI text explanations** (without an LLM, APIs degrade gracefully or report not configured).
+
+---
+
+## 2. Quick path for reviewers (5 minutes)
+
+### 2.1 Clone & run
 
 ```bash
-git clone https://github.com/<你的用户名>/environment_project.git
+git clone https://github.com/<your-username>/environment_project.git
 cd environment_project/monitor_business
 docker compose up -d postgres redis rabbitmq ai-inference-service monitor-service task-worker api-gateway
-# 前端（另开终端）
+# Frontend (separate terminal)
 cd frontend && npm install && npm run dev
 ```
 
-- 网关 API：`http://localhost:8080`
-- 管理台前端：通常为 `http://localhost:5173`（以 Vite 输出为准）
-- AI 服务健康检查：`http://localhost:8000/health`
+- Gateway API: `http://localhost:8080`
+- Admin frontend: typically `http://localhost:5173` (confirm Vite output)
+- AI service health: `http://localhost:8000/health`
 
-更完整的分步说明见 [monitor_business/README.md](./monitor_business/README.md)。
+Full step-by-step instructions: [monitor_business/README.md](./monitor_business/README.md).
 
-### 2.2 无需 LLM 即可验证 · Works without LLM
+### 2.2 Works without LLM
 
-| 功能 | 是否需要 LLM | 说明 |
-|------|----------------|------|
-| **Analytics → 流量/浊度预测图** | 否 | Ridge 模型在请求时从 IV CSV **现场拟合**，不依赖 `.pkl` |
-| 浊度四态监控、阈值扫描 | 否 | 规则 + 统计 |
-| 告警列表、站点地图、统计总览 | 否 | Spring + PostgreSQL |
-| **Copilot 浮窗问答** | **是** | 需 `ASSISTANT_LLM_*`（Ollama 或 OpenAI 兼容 API） |
-| 浊度 12h 风险 **AI 解释文案** | **是** | 无 LLM 时仍可看数值预测，解释字段会提示不可用 |
+| Feature | LLM required? | Notes |
+|---------|---------------|-------|
+| **Analytics → discharge/turbidity forecast charts** | No | Ridge model **fits on request** from IV CSV; no `.pkl` dependency |
+| Turbidity four-state monitoring, threshold scan | No | Rules + statistics |
+| Alert list, site map, stats overview | No | Spring + PostgreSQL |
+| **Copilot panel Q&A** | **Yes** | Needs `ASSISTANT_LLM_*` (Ollama or OpenAI-compatible API) |
+| Turbidity 12h risk **AI explanation text** | **Yes** | Numeric forecast still works; explanation field reports unavailable |
 
-审阅者若 **不配置 Ollama/API Key**：请重点看 **预测页曲线** 与 **告警/地图**；README 与演示视频可展示 Copilot（由作者本地录制）。
+If reviewers **do not configure Ollama/API key**: focus on **forecast curves** and **alerts/map**; README and demo video can still show Copilot (recorded locally by the author).
 
-### 2.3 可选：本机 Ollama（免费 Copilot）· Optional local LLM
+### 2.3 Optional: local Ollama (free Copilot)
 
 ```bash
-# macOS 示例：安装 Ollama 后
-ollama pull qwen2.5:3b   # 或 llama3.1:8b（与 docker-compose 默认一致）
+# macOS example: after installing Ollama
+ollama pull qwen2.5:3b   # or llama3.1:8b (matches docker-compose default)
 ```
 
-`monitor_business/docker-compose.yml` 中 `ai-inference-service` 已默认指向 `host.docker.internal:11434`。  
-复制 `ai_service/.env.example` 为 `ai_service/.env.local` 仅在你 **不用 Compose 环境变量、改本机直跑 uvicorn** 时需要。
+`monitor_business/docker-compose.yml` defaults `ai-inference-service` to `host.docker.internal:11434`.  
+Copy `ai_service/.env.example` to `ai_service/.env.local` only if you **run uvicorn locally** instead of Compose env vars.
 
-首次启用 Copilot 前在 `ai_service` 目录重建 RAG 索引（仅需已提交的 `docs/turbidity_operations.md`）：
+Before first Copilot use, rebuild the RAG index in `ai_service` (only needs committed `docs/turbidity_operations.md`):
 
 ```bash
 cd ai_service
@@ -69,32 +68,32 @@ python -m assistant.rag.indexer --rebuild
 
 ---
 
-## 3. 推荐 2 分钟演示视频 · 2-min video script
+## 3. Recommended 2-minute demo video script
 
-**画幅**：1920×1080 或 1280×720；**旁白或字幕**二选一即可。
+**Resolution**: 1920×1080 or 1280×720; voiceover or subtitles is enough.
 
-| 时间段 | 画面 | 旁白要点（中文） |
-|--------|------|------------------|
-| 0:00–0:20 | 浏览器打开 **Analytics / 预测** 页，选站点 `12117500`、参数流量 `00060` | 说明：Puget Sound USGS 站点，短时多步预测，辅助值班研判 |
-| 0:20–0:50 | 展示预测曲线加载、切换浊度 `63680` 或 12h 风险卡片（若有） | 强调：预测服务为独立 Python FastAPI，Java 网关转发 |
-| 0:50–1:40 | 展开 **Copilot**，依次输入下面 **3 个问题**（可剪成三个短回答） | 展示 RAG + 工具调用（需本机 Ollama 已启动） |
-| 1:40–2:00 | 告警列表或地图缩略 + 仓库 README「For reviewers / HR」与 GitHub 链接 | 总结：监测、预测、告警、可选 AI 运维助手 |
+| Time | Screen | Narration (English or Chinese) |
+|------|--------|--------------------------------|
+| 0:00–0:20 | Browser on **Analytics / Forecast**, site `12117500`, parameter discharge `00060` | Puget Sound USGS site; short multi-step forecast for shift review |
+| 0:20–0:50 | Forecast curve loads; switch to turbidity `63680` or 12h risk card if present | Forecast service is standalone Python FastAPI; Java gateway proxies |
+| 0:50–1:40 | Open **Copilot**; ask the **3 questions** below (can cut into three short answers) | Show RAG + tool calls (local Ollama must be running) |
+| 1:40–2:00 | Alert list or map thumbnail + repo README “For reviewers / HR” and GitHub link | Wrap-up: monitoring, forecast, alerts, optional AI ops assistant |
 
-### Copilot 推荐的 3 个演示问题
+### Three recommended Copilot demo questions
 
-1. **运维文档（RAG）**：`Phase B 是什么？recommend_alert 和 12h 风险有什么关系？`  
-2. **实时数据（工具）**：`站点 12117500 当前浊度状态是什么？`  
-3. **混合（RAG + 工具）**：`为什么站点 12117500 可能 recommend_alert？Phase B 文档怎么说？`
+1. **Ops docs (RAG)**: `What is Phase B? How does recommend_alert relate to 12h risk?`
+2. **Live data (tools)**: `What is the current turbidity state for site 12117500?`
+3. **Mixed (RAG + tools)**: `Why might site 12117500 recommend_alert? What does the Phase B doc say?`
 
-（英文问题亦可，Copilot 系统提示以英文回答运维文档类内容。）
+(Chinese questions work too; Copilot system prompts favor English for ops-doc answers.)
 
-**上传**：YouTube「未列出」或 B 站；在 README 的 **For reviewers / HR** 一节贴上链接。
+**Upload**: YouTube unlisted or Bilibili; paste the link in README under **For reviewers / HR**.
 
 ---
 
-## 4. 截图文件夹 · Screenshots
+## 4. Screenshots
 
-建议将审阅用静态图放在：
+Suggested static images for reviewers:
 
 ```
 docs/screenshots/
@@ -102,69 +101,69 @@ docs/screenshots/
   02-turbidity-risk.png
   03-copilot-panel.png
   04-alerts-map.png
-  05-architecture-snippet.png   # 可选：README 架构示意
+  05-architecture-snippet.png   # optional: README architecture diagram
 ```
 
-- 仓库已预留 `docs/screenshots/.gitkeep`；提交 PNG 前请 **打码** 任何内部 URL、密钥、真实员工信息。
-- 若不想把大图放进 Git，可只放 **3–5 张压缩图**，其余放在视频平台。
+- The repo includes `docs/screenshots/.gitkeep`; **redact** internal URLs, secrets, and real employee info before committing PNGs.
+- If you prefer not to store large images in Git, commit **3–5 compressed images** and put the rest on the video platform.
 
 ---
 
-## 5. 安全推送到 GitHub · Safe push checklist
+## 5. Safe push checklist
 
-推送前在仓库根目录执行：
+Before pushing from the repo root:
 
 ```bash
 git status
-git check-ignore -v ai_service/reports/eda/12117000_00060.png   # 应被忽略
-git check-ignore -v ai_service/.env.local                        # 应被忽略
+git check-ignore -v ai_service/reports/eda/12117000_00060.png   # should be ignored
+git check-ignore -v ai_service/.env.local                        # should be ignored
 ```
 
-**切勿提交**：
+**Never commit**:
 
-- `.env`、`.env.local`、任何 `*.pem` / `*.key`、API Key
-- `ai_service/data/`（IV CSV、特征表等，体积大且可能含敏感运维信息）
-- `ai_service/reports/`、回测 JSON、EDA 图、`models/*.pkl` 等大文件（见根目录 `.gitignore`）
-- 内部规划/面试用 Markdown（`ai_service/plan/`、`*implementation*` 等）
+- `.env`, `.env.local`, any `*.pem` / `*.key`, API keys
+- `ai_service/data/` (IV CSV, feature tables — large and may contain sensitive ops info)
+- `ai_service/reports/`, backtest JSON, EDA plots, `models/*.pkl`, and other large artifacts (see root `.gitignore`)
+- Internal planning / interview Markdown (`ai_service/plan/`, `*implementation*`, etc.)
 
-**建议首次公开前**：
+**Before first public push**:
 
 ```bash
-# 若历史上误提交过大文件，先从索引移除（不删本地文件）
+# If large files were committed historically, remove from index only (keeps local files)
 git rm -r --cached ai_service/reports/ 2>/dev/null || true
 git rm -r --cached ai_service/plan/ 2>/dev/null || true
 git rm --cached ai_service/models/*.pkl 2>/dev/null || true
-git status   # 确认仅源码、配置、DEMO、截图占位等
+git status   # confirm only source, config, DEMO, screenshot placeholders, etc.
 git push -u origin main
 ```
 
-在 GitHub 仓库 **Settings → General** 可开启 *Private vulnerability reporting*；**不要**在公开 README 写生产数据库密码。
+In GitHub **Settings → General**, you can enable *Private vulnerability reporting*; **do not** put production database passwords in a public README.
 
 ---
 
-## 6. README 中写给 HR 的一段话（可复制）· Blurb for README
+## 6. Blurb for README (copy-paste)
 
-在根目录 [README.md](./README.md) 的 **For reviewers / HR** 小节可写：
+In root [README.md](./README.md) under **For reviewers / HR**:
 
 > **For reviewers / HR**  
 > This is a water-quality monitoring demo (USGS IV, short-horizon forecast, alerts, optional RAG copilot).  
 > **No cloud spend required** for core UI: use Docker Compose per `monitor_business/README.md`.  
 > Copilot needs a local [Ollama](https://ollama.com) or your own LLM API key.  
-> **2-min walkthrough video**: \<你的链接\> · **Screenshots**: `docs/screenshots/` · **Details**: [DEMO.md](./DEMO.md)
+> **2-min walkthrough video**: \<your link\> · **Screenshots**: `docs/screenshots/` · **Details**: [DEMO.md](./DEMO.md)
 
 ---
 
-## 7. 常见问题 · FAQ
+## 7. FAQ
 
-**Q：公开仓库会不会泄露训练数据？**  
-A：`.gitignore` 已排除 `data/`、`reports/`、`.pkl`；仅提交源码与最小运维文档 `ai_service/docs/turbidity_operations.md`。
+**Q: Will a public repo leak training data?**  
+A: `.gitignore` excludes `data/`, `reports/`, and `.pkl`; only source and minimal ops doc `ai_service/docs/turbidity_operations.md` are committed.
 
-**Q：审阅者 clone 后 Copilot 没反应？**  
-A：检查 `curl http://localhost:8000/assistant/health`（或项目内等价健康接口）；确认 Ollama 运行且已 `python -m assistant.rag.indexer --rebuild`。
+**Q: Copilot does nothing after clone?**  
+A: Check `curl http://localhost:8000/assistant/health` (or the project’s health endpoint); confirm Ollama is running and run `python -m assistant.rag.indexer --rebuild`.
 
-**Q：能否完全云端演示？**  
-A：可以，但不再是 $0 方案；需自付云主机 + 可选 OpenAI API。HR 路径推荐 **本地 Docker + 视频补 Copilot**。
+**Q: Can I demo entirely in the cloud?**  
+A: Yes, but it is no longer $0; you need a cloud host and optionally OpenAI API. For HR review, **local Docker + video for Copilot** is recommended.
 
 ---
 
-*文档版本：与仓库 `.gitignore` 及 `assistant/config.py` 中 `DEFAULT_RAG_DOC_REL_PATHS` 同步维护。*
+*Document version: keep in sync with repo `.gitignore` and `DEFAULT_RAG_DOC_REL_PATHS` in `assistant/config.py`.*

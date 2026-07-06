@@ -91,8 +91,5 @@ ai_service/docs/ai_summary_turbidity.md
 ai_service/docs/flow_forecast_pipeline_interview.md
 # Keep committed: ai_service/docs/turbidity_operations.md (RAG source; see assistant/config.py)
 
-# --- Optional: trim internal business planning docs from public mirror ---
-monitor_business/docs/*-plan.md
-monitor_business/docs/TODO.md
-monitor_business/docs/bq-notes.md
-monitor_business/docs/distributed-system-plan.md
+# --- monitor_business internal design docs (local only; see monitor_business/BUSINESS.md in repo) ---
+monitor_business/docs/

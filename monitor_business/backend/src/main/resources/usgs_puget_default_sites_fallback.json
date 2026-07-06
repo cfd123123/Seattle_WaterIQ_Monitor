@@ -1,0 +1,26 @@
+{
+  "region_label": "Puget Sound / greater Seattle (surface-water NWIS IV demo)",
+  "notes": "Bundled fallback when the AI service is unreachable; keep in sync with ai_service/config/usgs_puget_default_sites.json.",
+  "sites": [
+    {
+      "site_no": "12117000",
+      "name": "Snoqualmie River near Snoqualmie, WA"
+    },
+    {
+      "site_no": "12141300",
+      "name": "Green River below Howard Hanson Dam at Palmer, WA"
+    },
+    {
+      "site_no": "12145500",
+      "name": "Green River near Auburn, WA"
+    },
+    {
+      "site_no": "12175500",
+      "name": "Raging River near Fall City, WA"
+    },
+    {
+      "site_no": "12147600",
+      "name": "Green River at Duwamish Gardens, WA"
+    }
+  ]
+}

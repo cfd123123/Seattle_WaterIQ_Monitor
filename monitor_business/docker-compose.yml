@@ -1,7 +1,20 @@
-# 本地环境：PostgreSQL + Tempo + Grafana（V4.2 链路与 4.1 指标面板）
-# postgres: docker compose up -d postgres
-# 可观测栈: docker compose up -d tempo prometheus grafana
-# Spring Boot 默认已关闭 OTLP 导出；起 Tempo 后请加 --spring.profiles.active=otlp 再上报到 4318。Grafana http://localhost:3000（匿名 Admin）
+# Local stack: infra + observability + Phase 4 service names (single file).
+#
+# Infra only:
+#   docker compose up -d postgres
+# Observability (Tempo / Prometheus / Grafana):
+#   docker compose up -d tempo prometheus grafana
+# RabbitMQ only (see docs/MQ使用.md):
+#   docker compose up -d rabbitmq
+#
+# Full app (gateway + monitor-service + task-worker + AI):
+#   docker compose up -d postgres redis rabbitmq ai-inference-service monitor-service task-worker api-gateway
+#   Public API http://localhost:8080 (gateway); monitor + Actuator direct http://localhost:18080;
+#   Worker health http://localhost:18088/actuator/health; AI :8000; RabbitMQ UI :15672
+# In containers Java uses WATER_AI_BASE_URL=http://ai-inference-service:8000
+#
+# OTLP export is off by default in Spring; enable profile otlp and Tempo (:4318) to export traces. Grafana http://localhost:3000 (anonymous Admin)
+
 services:
   postgres:
     image: postgres:16-alpine
@@ -24,7 +37,6 @@ services:
       - "4317:4317"
       - "4318:4318"
 
-  # Grafana 的 Prometheus 数据源需要真正的 Prometheus HTTP API（/api/v1/*），不能直接把 URL 指到 Actuator 文本端点
   prometheus:
     image: prom/prometheus:v2.55.1
     command:
@@ -35,8 +47,6 @@ services:
       - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     ports:
       - "9090:9090"
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
 
   grafana:
     image: grafana/grafana:11.3.1
@@ -55,5 +65,119 @@ services:
       - tempo
       - prometheus
 
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - water_monitor_rabbitmq:/var/lib/rabbitmq
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - water_monitor_redis:/data
+
+  # Python FastAPI (ai_service); Java reaches it by service name.
+  ai-inference-service:
+    build:
+      context: ../ai_service
+      dockerfile: Dockerfile
+    image: water-ai:local
+    ports:
+      - "8000:8000"
+    environment:
+      # R10 LLM assistant (M1+); host.docker.internal reaches Ollama on the Mac host (Docker Desktop).
+      ASSISTANT_ENABLED: "true"
+      ASSISTANT_LLM_BASE_URL: http://host.docker.internal:11434/v1
+      ASSISTANT_LLM_API_KEY: ""
+      ASSISTANT_LLM_MODEL: llama3.1:8b
+    volumes:
+      - ../ai_service/data:/app/data
+      # Bind only the sites JSON (avoid masking the whole /app/config dir from the image).
+      - ../ai_service/config/usgs_puget_default_sites.json:/app/config/usgs_puget_default_sites.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+  # Spring Boot: HTTP API, tasks, MQ producer (also reachable on published port without going through the gateway).
+  monitor-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: water-business:local
+    expose:
+      - "8080"
+    ports:
+      - "18080:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/water_monitor
+      SPRING_DATASOURCE_USERNAME: water
+      SPRING_DATASOURCE_PASSWORD: water
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_RABBITMQ_HOST: rabbitmq
+      WATER_AI_BASE_URL: http://ai-inference-service:8000
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      ai-inference-service:
+        condition: service_healthy
+
+  # Same image as monitor-service; worker profile = MQ consumer.
+  task-worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: water-business:local
+    command: ["java", "-jar", "/app/app.jar", "--spring.profiles.active=worker"]
+    ports:
+      - "18088:8088"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/water_monitor
+      SPRING_DATASOURCE_USERNAME: water
+      SPRING_DATASOURCE_PASSWORD: water
+      SPRING_DATA_REDIS_HOST: redis
+      SPRING_RABBITMQ_HOST: rabbitmq
+      WATER_AI_BASE_URL: http://ai-inference-service:8000
+    depends_on:
+      postgres:
+        condition: service_started
+      redis:
+        condition: service_started
+      rabbitmq:
+        condition: service_started
+      ai-inference-service:
+        condition: service_healthy
+
+  api-gateway:
+    build:
+      context: ./api-gateway
+      dockerfile: Dockerfile
+    image: water-api-gateway:local
+    ports:
+      - "8080:8080"
+    environment:
+      GATEWAY_MONITOR_URI: http://monitor-service:8080
+      GATEWAY_AI_URI: http://ai-inference-service:8000
+    depends_on:
+      monitor-service:
+        condition: service_started
+      ai-inference-service:
+        condition: service_started
+
 volumes:
   water_monitor_pgdata:
+  water_monitor_rabbitmq:
+  water_monitor_redis:

@@ -1,6 +1,6 @@
 {
   "region_label": "Puget Sound / greater Seattle (surface-water NWIS IV demo)",
-  "notes": "USGS 8-digit monitoring location ids. 可替换/扩展；全州覆盖时建议分批次拉取以免单次响应过大。",
+  "notes": "USGS 8-digit site ids. For batch statewide pulls, split requests to avoid oversized NWIS responses. Site 12117500 is the primary turbidity (63680) training target (dense IV). Other Puget sites may lack 63680 in short IV windows.",
   "sites": [
     {
       "site_no": "12117000",
@@ -19,8 +19,12 @@
       "name": "Raging River near Fall City, WA"
     },
     {
+      "site_no": "12117500",
+      "name": "Cedar River near Landsburg, WA"
+    },
+    {
       "site_no": "12147600",
-      "name": "Green River at Duwamish Gardens, WA"
+      "name": "South Fork Tolt River near Index, WA"
     }
   ]
 }

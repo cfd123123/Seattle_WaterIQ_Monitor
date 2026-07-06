@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -37,7 +38,11 @@ def _as_utc_date(d: datetime) -> datetime:
 
 
 def load_sites_config(path: Path) -> tuple[str, list[dict[str, Any]]]:
-    raw = json.loads(path.read_text(encoding="utf-8"))
+    # Allow JSONC-style single-line comments in local config files (same as backtest scripts).
+    text = path.read_text(encoding="utf-8")
+    clean = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("//"))
+    clean = re.sub(r",\s*([\]}])", r"\1", clean)
+    raw = json.loads(clean)
     region = str(raw.get("region_label", ""))
     sites = raw.get("sites")
     if not isinstance(sites, list) or not sites:
@@ -79,14 +84,46 @@ def fetch_iv_for_parameter(
     if df is None or df.empty:
         return pd.DataFrame(columns=["site_no", "datetime", parameter_cd, f"{parameter_cd}_quality_cd"])
     out = df.reset_index()
-    # 列名：site_no, datetime + 参数值与审批码
-    rename: dict[str, str] = {}
-    if parameter_cd in out.columns:
-        pass
-    for c in list(out.columns):
-        if c == f"{parameter_cd}_cd":
-            rename[c] = f"{parameter_cd}_quality_cd"
-    out = out.rename(columns=rename)
+    # Multi-site IV: NWIS may expose both ``63680`` and vendor columns (e.g. ``63680_nep5k turbidity sensor``);
+    # some sites populate only one of them — coalesce into canonical ``parameter_cd``.
+    nep_val = f"{parameter_cd}_nep5k turbidity sensor"
+    nep_qc = f"{parameter_cd}_nep5k turbidity sensor_cd"
+    if nep_val in out.columns:
+        if parameter_cd in out.columns:
+            base = pd.to_numeric(out[parameter_cd], errors="coerce")
+        else:
+            base = pd.Series(float("nan"), index=out.index)
+        nep = pd.to_numeric(out[nep_val], errors="coerce")
+        out[parameter_cd] = base.fillna(nep)
+        qc_target = f"{parameter_cd}_quality_cd"
+        q1 = out[f"{parameter_cd}_cd"] if f"{parameter_cd}_cd" in out.columns else pd.Series(pd.NA, index=out.index, dtype=object)
+        q2 = out[nep_qc] if nep_qc in out.columns else pd.Series(pd.NA, index=out.index, dtype=object)
+        out[qc_target] = q1.combine_first(q2)
+        drop_extra = [c for c in (nep_val, nep_qc, f"{parameter_cd}_cd") if c in out.columns]
+        out = out.drop(columns=drop_extra, errors="ignore")
+    else:
+        # Vendor-only name (single-site shape): rename to parameter_cd + quality_cd
+        rename: dict[str, str] = {}
+        if parameter_cd not in out.columns:
+            for c in list(out.columns):
+                if c in ("site_no", "datetime"):
+                    continue
+                if str(c).endswith("_cd"):
+                    continue
+                if str(c).startswith(parameter_cd):
+                    rename[c] = parameter_cd
+                    break
+        for c in list(out.columns):
+            if c in ("site_no", "datetime"):
+                continue
+            sc = str(c)
+            if sc.startswith(parameter_cd) and sc.endswith("_cd"):
+                rename[c] = f"{parameter_cd}_quality_cd"
+                break
+            if sc == f"{parameter_cd}_cd":
+                rename[c] = f"{parameter_cd}_quality_cd"
+                break
+        out = out.rename(columns=rename)
     keep = ["site_no", "datetime", parameter_cd]
     qc = f"{parameter_cd}_quality_cd"
     if qc in out.columns:
@@ -214,11 +251,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path(__file__).resolve().parent / "data" / "usgs_puget_iv.csv",
         help="输出 CSV 路径",
     )
+    p.add_argument(
+        "--extra-site-nos",
+        type=str,
+        default="",
+        help="Comma-separated 8-digit site numbers merged into the fetch list (e.g. 12147600 for Green River turbidity).",
+    )
     return p.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
+    extra_sites = [x.strip() for x in str(args.extra_site_nos).split(",") if x.strip()]
     try:
         meta = run_fetch(
             sites_config=args.sites_config,
@@ -227,6 +271,7 @@ def main(argv: list[str] | None = None) -> int:
             days=args.days,
             parameters=args.parameters,
             out=args.out,
+            extra_site_nos=extra_sites or None,
         )
     except ValueError as e:
         print(str(e), file=sys.stderr)

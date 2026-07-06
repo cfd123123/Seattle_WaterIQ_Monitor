@@ -23,7 +23,7 @@ flowchart TB
   end
 
   subgraph DB["持久化"]
-    PG[("PostgreSQL\nmonitor_station · water_quality_record\nalert_event · model_call_log …")]
+    PG[("PostgreSQL\nmonitor_station · usgs_site_param_run\nalert_event · model_call_log · async_task …")]
   end
 
   subgraph Py["Python · ai_service :8000"]
@@ -65,10 +65,10 @@ flowchart TB
 
 ```mermaid
 flowchart LR
-  subgraph PathA["路径 A：在线检测"]
-    C1["POST /api/check\n11 项指标"] --> P1["Python /predict\n规则或遗留模型"]
-    P1 --> R1["water_quality_record"]
-    R1 --> A1["alert_event\n达阈值时"]
+  subgraph PathA["路径 A：USGS 单参 IV / 异常"]
+    IV0["NWIS / IV CSV"] --> P0["Python / Java\nIV 刷新与巡检"]
+    P0 --> U0["usgs_site_param_run"]
+    U0 --> A0["alert_event\n（若产生 IF 异常等）"]
   end
 
   subgraph PathB["路径 B：USGS 浊度阈值"]

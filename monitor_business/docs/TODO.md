@@ -22,6 +22,7 @@
 
 ## 其它（可选）
 
+- [ ] **LangChain / LLM（可选，非核心刚需）**：当前仓库**未使用** LangChain；核心业务（USGS IV 拉数、Ridge 短时预测、阈值/IsolationForest 异常与告警）**不依赖** LLM 编排。若无明确产品场景，引入会增加复杂度与运维面。**若**需补强 LLM 方向简历或运营能力，可后续以**独立模块**试点：**RAG（文档/运维手册问答）**、**告警摘要**、**自然语言→结构化 API 调用**等，并明确**不替代**数值预测与合规/规则终裁主路径。
 - [ ] 数据库层显式外键约束（当前为逻辑关联 + JPA 字段）。
 - [x] **持久化库**：默认已切换 **PostgreSQL**（`docker-compose.yml` + [postgresql-setup.md](./postgresql-setup.md)）；无 PG 时可用 **`h2` profile** 文件库。
 - [ ] **前端驾驶舱体验优化（后置）**：
@@ -33,5 +34,5 @@
 
 ## 本地验证约定
 
-- **每次新测试前**：先停掉上一次用于联调的 **Spring Boot**（`mvn spring-boot:run` 所在终端 **Ctrl+C**），以及不再需要的 **Python uvicorn** / **Docker 起的 PostgreSQL**（若需释放 **5432**）；避免 **端口占用**（如 `8080` / `8000` / `5432`）。
+- **每次新测试前**：先停掉上一次用于联调的 **Spring Boot**（在 `monitor_business/backend` 下 `mvn spring-boot:run` 的终端 **Ctrl+C**），以及不再需要的 **Python uvicorn** / **Docker 起的 PostgreSQL**（若需释放 **5432**）；避免 **端口占用**（如 `8080` / `8000` / `5432`）。
 - **排查占用**（macOS）：`lsof -i :<端口>`，再 `kill <PID>`。

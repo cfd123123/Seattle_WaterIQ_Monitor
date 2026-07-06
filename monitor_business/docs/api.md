@@ -25,88 +25,9 @@
 ### GET `/actuator/prometheus`
 - 说明：Prometheus 指标抓取
 
-## 3. 检测接口
+## 3. 检测与地图
 
-### POST `/api/check`
-
-- 说明：单次检测，调用 AI 后落库并可能触发告警。
-- 重试：当 AI 接口出现瞬时网络异常或返回 `503` 时，服务端会自动重试（间隔 `500ms`，最多重试 `3` 次）。
-- 请求体（11 个字段 + `stationCode` 必填；`observed_fields` 可选）：
-
-```json
-{
-  "Water_Temperature_C": 24.5,
-  "pH": 7.1,
-  "Dissolved_Oxygen_mg_L": 6.9,
-  "Conductivity_uS_cm": 305.0,
-  "Turbidity_NTU": 4.0,
-  "Nitrate_mg_L": 1.2,
-  "Ammonia_N_mg_L": 0.18,
-  "Total_Phosphorus_mg_L": 0.06,
-  "COD_mg_L": 16.5,
-  "BOD_mg_L": 3.1,
-  "Heavy_Metals_Pb_ug_L": 4.2,
-  "stationCode": "puget_12117000",
-  "observed_fields": ["Water_Temperature_C", "pH"]
-}
-```
-
-`observed_fields`：列明哪些指标为**实测**（与 USGS 等数据源对齐）；省略时规则引擎按 **11 项均实测**（`coverage_ratio`=1）处理。  
-当前规则综合分仍按 **11 项数值**加权计算（含占位值）；`coverage_ratio` / `imputed_fields` 仅用于**透明度展示**，后续可迭代为「按实测子集重加权」。
-
-- 成功 `data`（规则模式由 Python 返回；字段可能略多）：
-
-```json
-{
-  "pollution_level": "Poor",
-  "score": 41.2,
-  "rule_version": "rule-v1-2026-03",
-  "observed_count": 2,
-  "coverage_ratio": 0.1818,
-  "imputed_fields": ["Dissolved_Oxygen_mg_L", "Conductivity_uS_cm"]
-}
-```
-
-（`imputed_fields` 完整列表以实际响应为准，示例仅作说明。）
-
-### POST `/api/check/batch`
-
-- 说明：批量检测，单条失败不影响其他条。
-- 限制：`items` 至少 1 条，最多 100 条。
-- 校验：每条都必须带有效 `stationCode`（已在 `monitor_station.station_code` 登记）；否则该条返回失败。
-- 请求体：
-
-```json
-{
-  "items": [
-    {
-      "Water_Temperature_C": 24.5,
-      "pH": 7.1,
-      "Dissolved_Oxygen_mg_L": 6.9,
-      "Conductivity_uS_cm": 305.0,
-      "Turbidity_NTU": 4.0,
-      "Nitrate_mg_L": 1.2,
-      "Ammonia_N_mg_L": 0.18,
-      "Total_Phosphorus_mg_L": 0.06,
-      "COD_mg_L": 16.5,
-      "BOD_mg_L": 3.1,
-      "Heavy_Metals_Pb_ug_L": 4.2
-    }
-  ]
-}
-```
-
-- 成功 `data`：
-  - `successCount` / `failCount`
-  - `results[]`：每项包含 `index`、`success`、成功时 `data` 或失败时 `errorMessage`
-
-### GET `/api/records`
-
-- 说明：检测记录分页查询
-- 查询参数：
-  - `page`（默认 0）
-  - `size`（默认 20）
-- 返回：`PageResponse<WaterQualityRecord>`
+**说明**：`water_quality_record` 表及「`POST /api/check` / `POST /api/check/batch` 写检测事实表」路径已从当前 Spring 应用移除；若需 **11 项规则评分**，请直接联调 **`ai_service` `POST /predict`**（见 Python OpenAPI）。`POST /api/usgs/iv/refresh` 文档中的 `runChecksAfterRefresh` 若仍提及批量检测，以实现为准。
 
 ### GET `/api/map/stations`
 
@@ -226,7 +147,7 @@
 - 说明：触发 AI 服务从 **NWIS** 拉取瞬时数据（IV），合并后 **整文件覆盖** 写入默认 `ai_service/data/usgs_puget_iv.csv`（**不追加**，仅保留最近 `days` 天窗口内数据，避免 CSV 无限增大）。
 - 请求体（可选）：
   - `days`：**1–90**，省略时按 **30**。
-  - `runChecksAfterRefresh`：`true` 时，在**覆盖写入前**读取旧 IV 文件，对本次合并结果中与旧文件相比 **新增的 `(site_no, datetime)` 行** 各生成一条 11 项请求体，**批量走与 `/api/check` 相同的落库与告警逻辑**（每批最多 100 条，多分块；每条独立事务）。**首次刷新**（无旧文件）时，窗口内**每一行**都会视为新增并各跑一次检测。若 `monitor_station.external_id` 与该 USGS `site_no` 一致，则自动带上 `stationCode`。
+  - `runChecksAfterRefresh`：`true` 时，IV 刷新完成后在 Java 侧**触发一次 USGS 浊度阈值扫描**（`TurbidityThresholdAlertService`），**不**再批量调用已删除的 `/api/check` 或写 `water_quality_record`。
 - 额外行为（已实现）：
   - 刷新时会把数据库中已登记站点的 `externalId`（去重）作为附加站点列表一并传给 Python，与默认配置站点合并后拉取；
   - 这意味着：新增站点并通过 USGS 校验后，后续刷新无需手改 JSON 也可参与拉取。
@@ -235,7 +156,7 @@
 
 ### 直连 Python（IV 刷新）
 
-- `POST http://localhost:8000/refresh/usgs-iv`，请求体：`{ "days": 30, "include_latest_check_payloads": false }`；为 `true` 时响应含 `incremental_check_payloads`、`incremental_rows_new`（相对旧文件的差集；供 Java 编排检测）。
+- `POST http://localhost:8000/refresh/usgs-iv`，请求体：`{ "days": 30, "include_latest_check_payloads": false }` 等；`include_latest_check_payloads=true` 时响应可含差集载荷（供自定义编排；当前 Spring 默认路径不据此写检测事实表）。
 
 ### POST `/api/forecast`
 
@@ -278,7 +199,7 @@
 1. 调用 `POST /api/stations` 或 `PUT /api/stations/{stationCode}` 保存站点；
 2. 若有 `externalId`，系统实时校验 USGS 站点是否存在，不存在直接返回警告（`400`）；
 3. 调用 `POST /api/usgs/iv/refresh` 刷新 IV，系统自动合并“默认站点 + 数据库已登记 externalId”进行拉取；
-4. 若 `runChecksAfterRefresh=true`，仅对“已登记并能映射到 stationCode”的增量点执行检测并落库，避免孤儿记录。
+4. 若 `runChecksAfterRefresh=true`，刷新后执行浊度阈值扫描并可能写入 `alert_event`（见实现），不写入 `water_quality_record`。
 
 ## 10. 相关文档
 

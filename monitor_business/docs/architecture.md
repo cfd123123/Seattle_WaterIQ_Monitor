@@ -29,7 +29,7 @@
 
 - 对外 REST 由多个 Controller 分工（**已移除**旧的 `/water-quality/*` 与重复 Feign，避免双入口）。
 - 当前已实现：
-  - **`MonitorController`**：`POST /api/check`、`POST /api/check/batch`、`GET /api/records`、`GET /api/map/stations`（地图站点快照）。
+  - **`MonitorController`**：`GET /api/map/stations`（地图站点快照）。
   - **`StationController`**：`POST /api/stations`（幂等 upsert）、`GET /api/stations`。
   - **`ForecastController`**：`POST /api/forecast`（代理 Python `POST /forecast`，带重试配置）。
   - **`StatsController`**、`AlertController`：统计与告警（见第 6 节）。
@@ -88,16 +88,9 @@
 
 ---
 
-## 4. 核心业务流程（单次检测）
+## 4. 核心业务流程（概念）
 
-1. 客户端调用 `POST /api/check` 并提交 11 个水质指标。
-2. Controller 将请求交给应用服务。
-3. 应用服务执行参数校验（非空、数值范围、单位）。
-4. 调用 `WaterAIClient.predict()` 请求 Python `POST /predict`（规则评分或遗留模型，由 Python 侧配置决定）。
-5. 获取 `pollution_level`（兼容 `Pollution_Level`）并转换为内部统一表示；请求可携带 `stationCode`、`observed_fields` 等与 USGS 实测对齐的字段。
-6. 执行业务规则（告警分级、去重、升级策略）。
-7. 落库（检测记录、AI 调用日志、告警事件）。
-8. 返回结果给调用方。
+当前主线为 **USGS IV / 站点 / 告警 / 预测 / 异步任务**（见各 Controller 与 `database-schema.md`）。历史上曾描述「`POST /api/check` → 写检测事实表」的流程；**`water_quality_record` 已移除**，不再作为默认落库路径。Python **`POST /predict`** 仍可由联调或 IV 刷新可选路径调用，但不强制经已删除的检测分页 API。
 
 ---
 
@@ -105,14 +98,9 @@
 
 **表关系、字段清单与 ER 示意**已单独整理为：[database-schema.md](./database-schema.md)。
 
-### 5.1 `water_quality_record`
+### 5.1 检测事实表 `water_quality_record`（已移除）
 
-- 主键 ID
-- 11 项输入指标
-- `pollution_level`
-- `source`（如 `API`）、`create_time`、`sample_time`
-- 可选 **`station_id`**（逻辑关联 `monitor_station`）
-- `traceId`
+该表及对应 JPA 实体已从当前代码库删除；**不再**作为「一次检测一行」的主事实表。统计与趋势以 **`usgs_site_param_run`**、**`alert_event`**、**`model_call_log`** 等为准，详见 [database-schema.md](./database-schema.md) 与 [stats-definition.md](./stats-definition.md)。
 
 **站点主数据 `monitor_station`**（已实现）：`station_code` 唯一、经纬度、可选 **`external_id`（USGS `site_no`）** 等；详情与 ER 见 [database-schema.md](./database-schema.md)。
 
@@ -150,9 +138,6 @@
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `POST` | `/api/check` | 请求体：`WaterQualityRequest`（11 项指标，JSON 字段名与 Python 一致）。`data`：`WaterQualityResponse`（`pollution_level`）。侧写库：`water_quality_record`。 |
-| `POST` | `/api/check/batch` | 请求体：`WaterQualityBatchRequest`，字段 `items`：非空、`@Valid` 的 `WaterQualityRequest` 列表，**最多 100 条**；仅整体 JSON 校验失败时整请求返回 400。`data`：`WaterQualityBatchResponse`（`results`：每项含 `index`、`success`、成功时的 `data`（`WaterQualityResponse`）或失败时的 `errorMessage`；以及 `successCount`、`failCount`）。**每条**使用独立事务（传播 `REQUIRES_NEW`）执行与单条检测相同的落库与达阈值写告警；单条失败不回滚其它条；AI 调用失败时 `model_call_log` 失败记录在**嵌套独立事务**中提交，避免随本条主事务回滚丢失。 |
-| `GET` | `/api/records` | 分页查询历史记录。查询参数：`page`、`size`（从 0 开始，默认 `size=20`，按 `createTime` 降序）。`data`：**`PageResponse<WaterQualityRecord>`**（见下）。 |
 | `GET` | `/api/stats/overview` | 统计总览（MVP）：不需要查询参数。`data`：`StatsOverviewResponse`，含总检测/总告警/总 AI 失败、当前未关闭告警，以及今日与最近 7 天的检测/告警/AI 失败汇总。 |
 | `GET` | `/api/stats/distribution` | 分布统计（MVP）：可选查询参数 `from`/`to`（`yyyy-MM-dd`，要么都传要么都不传）。`data`：`StatsDistributionResponse`，含污染等级分布（`pollutionLevelDistribution`）与告警严重度分布（`alertSeverityDistribution`）。若传日期，查询跨度默认不超过 **365 天**（`water.stats.max-range-days`）。 |
 | `GET` | `/api/stats/trend` | 趋势统计（MVP）：查询参数 `from`/`to`（`yyyy-MM-dd`，含边界）、`granularity`（当前仅支持 `day`）。`data`：`StatsTrendResponse`，含每日 `checkCount`、`alertCount`、`aiFailureCount` 与 `pollutionLevelBreakdown`。查询跨度默认不超过 **365 天**（`water.stats.max-range-days`）。 |
@@ -169,7 +154,7 @@
 
 **分页体 `PageResponse`（稳定 JSON）**：`content`、`totalElements`、`totalPages`、`page`（从 0 起）、`size`、`first`、`last`、`numberOfElements`、`empty`。
 
-**说明**：业务侧不再提供 `/water-quality/predict`。判定走本服务 **`/api/check`**（内部 Feign → Python **`POST /predict`**）；短时预测走 **`/api/check`** 之外的 **`POST /api/forecast`**。离线拉取 IV 数据可使用仓库内 **`ai_service/fetch_usgs_puget_sound.py`**（写入 CSV，不自动写业务库）。
+**说明**：业务侧不再提供 `/water-quality/predict`；**`/api/check`**、**`/api/records`** 等旧版检测分页接口已不在当前控制器中。短时预测走 **`POST /api/forecast`**（Python `POST /forecast`）。离线拉取 IV 数据可使用仓库内 **`ai_service/fetch_usgs_puget_sound.py`**（写入 CSV，不自动写业务库）。
 
 ### 6.2 后续接口
 
@@ -239,7 +224,7 @@
 ### 10.2 中期
 
 - 容器化部署（Docker）。
-- 接入网关（Nginx / API Gateway）。
+- 接入网关（Spring Cloud Gateway）。
 - 使用 K8s 做弹性扩容。
 
 ### 10.3 长期
@@ -257,16 +242,13 @@
 ### V1（已完成）
 
 - Spring Boot 工程搭建
-- Feign 调用 Python `/predict`
-- `POST /api/check` 基础联调通过
+- Feign 调用 Python `/predict`（联调能力）
 
 ### V2（已完成）
 
-- H2 + JPA：`water_quality_record` 持久化；H2 Console 可查看数据
-- `WaterQualityService` 编排：调 AI → 写库 → 返回
+- H2 + JPA：本地 profile 可用 H2 Console 查看数据
 - 统一响应 `ApiResponse`、全局异常、`TraceIdFilter`
-- `GET /api/records` 分页查询
-- **路线 A**：移除 `WaterQualityController` / `PredictClient`，仅保留 `MonitorController` + `WaterAIClient` 作为业务入口
+- `WaterQualityService` / `water_quality_record` 主路径已移除；当前以 USGS/站点/告警/预测为主
 
 ### V3
 
@@ -289,7 +271,7 @@ V4 **主目标**：监控指标、链路追踪、接口鉴权与授权、统计/
 
 - 依赖：`spring-boot-starter-actuator`、`micrometer-registry-prometheus`；另加 **`feign-micrometer`** 便于 Feign 出站请求进入 Micrometer（与下方业务 Timer 并存，名称空间不同）。
 - 配置：`application.properties` 中 `management.endpoints.web.exposure.include=health,info,prometheus`，`spring.application.name=water-business`，HTTP 服务端 `percentiles-histogram` 已打开；**生产**应对 `/actuator/**` 做网络隔离或接入 Security。
-- 自定义指标：`WaterBusinessMetrics`（`water.ai.predict`：Timer，`outcome=success|failure`；`water.alerts.created`：Counter；`water.check.batch.items`：Counter，`outcome=success|failure`）。调用点在 `WaterQualityService`（单次/批量预测与落告警）。
+- 自定义指标：`WaterBusinessMetrics`（若已注册：`water.ai.predict`、`water.alerts.created` 等；以实际 `/actuator/prometheus` 为准）。
 - **拉取示例**：启动后访问 `GET http://localhost:8080/actuator/prometheus`，检索 `water_`、`http_server_requests`、JVM 等序列。
 - **Grafana 大盘**：`observability/grafana/dashboards/water-business-overview.json`（HTTP、业务 `water_*`、JVM、Hikari）；`docker compose up -d grafana` 后于 **Dashboards** 打开 **水质业务 · 监控大盘**，顶部可选 **Application** 变量。
 
@@ -298,13 +280,13 @@ V4 **主目标**：监控指标、链路追踪、接口鉴权与授权、统计/
 - 选型并实现 **分布式追踪**（如 **OpenTelemetry** 接入 **Zipkin** / **Jaeger** / **SkyWalking** 等之一）。
 - 串联 **Spring MVC → Feign → Python**：同一业务请求共用一个 trace， spans 覆盖 HTTP 出站与（可选）Python 侧 OTLP。
 - 与现有 **`TraceIdFilter` / `X-Trace-Id` / MDC** 对齐，避免日志 trace id 与追踪后端不一致。
-- **验收建议**：一次 `/api/check` 在追踪 UI 中可见 **Java 侧** MVC + Feign 子跨度；Python 侧 OTLP 为可选增强。
+- **验收建议**：任一带 Feign 出站的请求在追踪 UI 中可见 **Java 侧** MVC + Feign 子跨度；Python 侧 OTLP 为可选增强。
 
 **当前已落地（Tempo + Grafana）**：
 
 - **Java**：`micrometer-tracing-bridge-otel` + `opentelemetry-exporter-otlp`；`management.otlp.tracing.endpoint=http://127.0.0.1:4318/v1/traces`，`management.tracing.sampling.probability=1.0`（开发全采样）；`spring.cloud.openfeign.observation.enabled=true`（Feign 出站观测）。
 - **`TraceIdFilter`**：顺序在入口观测之后（`Ordered.HIGHEST_PRECEDENCE + 100`），**优先使用 Micrometer/OTEL 的 trace id** 写入 MDC 与 `X-Trace-Id`；无活跃 span 时回退请求头或 UUID。
-- **本地栈**（与 `docker-compose.yml` 同目录）：`docker compose up -d tempo prometheus grafana`。**Tempo** OTLP `4317`/`4318`；**Prometheus** `9090`（抓取宿主机 `host.docker.internal:8080/actuator/prometheus`，见 `observability/prometheus/prometheus.yml`）。**Grafana** `http://localhost:3000`：数据源 **Tempo** → `http://tempo:3200`；**Prometheus** → `http://prometheus:9090`（⚠️ 不能把 Grafana 直接指到 Actuator URL，否则会 404：Grafana 需要 Prometheus 的 `/api/v1/query` API）。
+- **本地栈**（与 `docker-compose.yml` 同目录）：`docker compose up -d tempo prometheus grafana`。**Tempo** OTLP `4317`/`4318`；**Prometheus** `9090`（默认抓取 Compose 网络内 **`monitor-service:8080/actuator/prometheus`**，见 `observability/prometheus/prometheus.yml`；仅起可观测栈、未起业务容器时需改 targets 或会抓取失败）。**Grafana** `http://localhost:3000`：数据源 **Tempo** → `http://tempo:3200`；**Prometheus** → `http://prometheus:9090`（⚠️ 不能把 Grafana 直接指到 Actuator URL，否则会 404：Grafana 需要 Prometheus 的 `/api/v1/query` API）。
 - **配置与文件**：`observability/tempo.yaml`、`observability/prometheus/prometheus.yml`、`observability/grafana/provisioning/datasources/datasources.yaml`；**预置大盘** JSON：`observability/grafana/dashboards/water-business-overview.json`（provisioning：`observability/grafana/provisioning/dashboards/dashboards.yaml`）。Grafana 侧边栏 **Dashboards** 可见 **「水质业务 · 监控大盘」**。
 - **使用顺序**：先起 Tempo，再起 **Spring Boot**，再在 Grafana → Explore → Tempo 查 trace；未起 Tempo 时 OTLP 可能打错误日志，应用一般仍可运行。
 - **后续**：`ai_service` 增加 OTLP 导出后，可在同一 Trace 中拼接 Python span。
@@ -319,7 +301,7 @@ V4 **主目标**：监控指标、链路追踪、接口鉴权与授权、统计/
 
 #### 4.4 统计报表与趋势分析（Stats / Trend）
 
-- 数据源：**`water_quality_record`**、**`alert_event`**、**`model_call_log`**（只读聚合）。
+- 数据源：**`usgs_site_param_run`**、**`alert_event`**、**`model_call_log`**（只读聚合）；与 [stats-definition.md](./stats-definition.md) 一致。
 - **能力**：按时间窗口聚合（如按日/周）、**污染等级分布**、**告警量/严重度趋势**、检测量与 AI 失败概览等（具体指标在实现时固化到 OpenAPI/文档）。
 - **接口形态**：新增如 **`GET /api/stats/trend`**（或拆为多资源：`/api/stats/overview`、`series` 等），请求参数含时间范围、粒度；响应适合前端图表与运营导出。
 - **实现注意**：大数据量时考虑**数据库索引**、分页或预聚合策略；时间与语义延续 [time-and-timezone.md](./time-and-timezone.md) 现状，若日后做 UTC 统一再同步调整（见 [TODO.md](./TODO.md)）。
@@ -348,16 +330,16 @@ V4 **主目标**：监控指标、链路追踪、接口鉴权与授权、统计/
   - `WaterAIClient`：调用 Python `POST /predict`（规则或遗留模型）
   - `WaterForecastClient` / `ForecastService` / `ForecastController`：`POST /api/forecast` → Python `POST /forecast`
   - `WaterAiMaintenanceClient` / `UsgsIvRefreshService` / `UsgsIvRefreshController`：`POST /api/usgs/iv/refresh` → Python `POST /refresh/usgs-iv`（覆盖写 IV CSV）
-  - `MonitorController`：`POST /api/check`、`POST /api/check/batch`、`GET /api/records`、`GET /api/map/stations`
+  - `MonitorController`：`GET /api/map/stations`
   - `StationController`：`POST /api/stations`、`GET /api/stations`；`MonitorStation` 实体与 `externalId`（USGS）对齐 IV/预测
   - `StatsController`：`GET /api/stats/overview`、`/distribution`、`/trend`
   - `AlertController`：`GET /api/alerts`（筛选）、`POST .../ack`、`POST .../close`
-  - `WaterQualityService` / `AlertService`：检测编排、入库、告警写入与确认
-  - DTO：`WaterQualityRequest`、`WaterQualityResponse`、`ApiResponse`、`AlertAckRequest`
-  - 实体/仓储：`WaterQualityRecord`、`AlertEvent`、`ModelCallLog` 及对应 Repository
+  - `AlertService` 等：告警写入与确认
+  - DTO：`ApiResponse`、`AlertAckRequest` 等（与 OpenAPI 一致）
+  - 实体/仓储：`AlertEvent`、`ModelCallLog`、`MonitorStation`、`UsgsSiteParamRun`、`AsyncTask` 等及对应 Repository
   - 横切：`TraceIdFilter`、`GlobalExceptionHandler`、`WaterAlertProperties`
   - **V4.1 指标**：Spring Boot Actuator + Prometheus（`/actuator/prometheus`）、`WaterBusinessMetrics`（`water.*` 前缀自定义指标）
-  - **V4.2 追踪**：Micrometer OTEL bridge + OTLP → **Grafana Tempo**；**Grafana** 联 Tempo + 宿主机 Prometheus（见 §11 4.2）
+  - **V4.2 追踪**：Micrometer OTEL bridge + OTLP → **Grafana Tempo**；**Grafana** 联 Tempo + Compose 内 **Prometheus**（抓取目标见 `observability/prometheus/prometheus.yml`；见 §11 4.2）
 - 暂缓优化项（见 [TODO.md](./TODO.md)）：`rule_config`、异步通知等。
 - **V4**：见上文 **§11 V4** 工作包（4.1 指标、**4.2 Tempo+Grafana 追踪**、4.4 统计接口已落地；4.3 与 4.5、TODO 边界）。
 

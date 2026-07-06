@@ -4,7 +4,7 @@
 -- 用法：
 --   psql -h localhost -U water -d water_monitor -f scripts/delete_all_alert_events.sql
 --
--- 说明：仅删除 alert_event；water_quality_record（检测记录）不受影响。
+-- Deletes all rows from alert_event only (monitor_station and other tables are untouched).
 
 BEGIN;
 

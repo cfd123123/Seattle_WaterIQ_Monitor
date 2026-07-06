@@ -10,7 +10,7 @@
 ## 方式 A：Docker（推荐，与项目对齐）
 
 1. 启动 **Docker Desktop**（或确保 `docker info` 无报错）。
-2. 在项目根目录 **`monitor_business`** 执行：
+2. 在 **`monitor_business`** 目录执行（与 `docker-compose.yml` 同级）：
 
    ```bash
    docker compose up -d
@@ -61,10 +61,10 @@ psql postgres -c "CREATE DATABASE water_monitor OWNER water;"
 - **临时退回 H2 文件库**（不装 PostgreSQL 时）：
 
   ```bash
-  mvn spring-boot:run -Dspring-boot.run.profiles=h2
+  cd backend && mvn spring-boot:run -Dspring-boot.run.profiles=h2
   ```
 
-  对应 **`application-h2.properties`**，数据文件在 **`monitor_business/data/`**（`AUTO_SERVER` 便于多进程访问同一文件库，仅开发用）。
+  对应 **`application-h2.properties`**，数据文件在 **`monitor_business/backend/data/`**（`AUTO_SERVER` 便于多进程访问同一文件库，仅开发用）。
 
 ---
 

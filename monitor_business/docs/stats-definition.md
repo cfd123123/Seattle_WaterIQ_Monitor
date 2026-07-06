@@ -26,7 +26,7 @@
 
 ### 3.1 `/api/stats/overview`
 
-- `totalCheckCount`：`water_quality_record` 总记录数。
+- `totalCheckCount`：`usgs_site_param_run` 表总行数（USGS 单参数 IV 巡检/异常检测运行记录）。
 - `totalAlertCount`：`alert_event` 总记录数。
 - `totalAiFailureCount`：`model_call_log.success=false` 总记录数。
 - `openAlertCount`：`alert_event.status IN ('NEW','ACK')` 的数量。
@@ -35,7 +35,7 @@
 
 ### 3.2 `/api/stats/distribution`
 
-- `pollutionLevelDistribution`：按 `water_quality_record.pollution_level` 分组计数。
+- `pollutionLevelDistribution`：按 `alert_event.pollution_level` 分组计数（来自告警快照字段，非独立事实表）。
   - 输出进行标准化：`excellent/good/moderate/poor/very poor` 归一为 `Excellent/Good/Moderate/Poor/Very Poor`。
 - `alertSeverityDistribution`：按 `alert_event.severity` 分组计数。
   - 输出归一为 `LOW/MEDIUM/HIGH`，空值为 `UNKNOWN`。
@@ -46,14 +46,14 @@
 
 - 当前仅支持 `granularity=day`。
 - `series[i].date`：自然日。
-- `checkCount`：当日检测记录数。
+- `checkCount`：趋势接口中保留字段，当前 USGS 趋势以 `flowDetectionCount` / `turbidityDetectionCount` 等为主；全零为预期（见实现）。
 - `alertCount`：当日告警记录数。
 - `aiFailureCount`：当日 AI 失败日志数（`model_call_log.success=false`）。
 - `pollutionLevelBreakdown`：当日按污染等级分组统计。
 
 ## 4. 指标定义（Grafana / Prometheus）
 
-- `water_checks_completed_total`：每次检测成功写入 `water_quality_record` 后 +1，带 `pollution_level` 标签。应用在启动时即为各等级预注册计数器（初值 0），避免 Prometheus 首次抓取即为 1 导致 `increase()` 长期为 0。
+- `water_checks_completed_total`：若应用内仍注册该 Micrometer 指标，则与「水质检测事实表」无绑定；以当前代码为准（可能未再递增）。以 Prometheus 实际抓取到的序列为准。
 - `water_alerts_total`：每次创建告警后 +1（Micrometer 对 `water.alerts.created` 导出的 Prometheus 名称），带 `severity`、`pollution_level` 标签；同样预注册常见 `severity`×`pollution_level` 组合。
 - `water_ai_predict_seconds_count{outcome="failure"}`：AI 调用失败次数（Timer count）。
 

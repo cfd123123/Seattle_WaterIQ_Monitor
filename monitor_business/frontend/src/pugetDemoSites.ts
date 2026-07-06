@@ -9,6 +9,7 @@ export type PugetDemoSite = {
   longitude: number
 }
 
+/** Static fallback when GET /api/demo/puget-sites is unavailable; also used to fill missing map coordinates by site_no. */
 export const PUGET_DEMO_SITES: PugetDemoSite[] = [
   {
     externalId: '12117000',
@@ -41,3 +42,32 @@ export const PUGET_DEMO_SITES: PugetDemoSite[] = [
     longitude: -122.305,
   },
 ]
+
+type ApiPugetRow = {
+  site_no?: string
+  name?: string
+  latitude?: number
+  longitude?: number
+}
+
+/**
+ * Builds demo-site rows from AI config JSON. Uses {@link PUGET_DEMO_SITES} for coordinates when the API omits lat/lon.
+ */
+export function mergePugetSitesFromApi(sites: unknown[] | undefined, fallback: PugetDemoSite[]): PugetDemoSite[] {
+  if (!sites || !Array.isArray(sites) || sites.length === 0) {
+    return fallback
+  }
+  const out: PugetDemoSite[] = []
+  for (const row of sites) {
+    if (!row || typeof row !== 'object') continue
+    const r = row as ApiPugetRow
+    const id = String(r.site_no ?? '').trim()
+    if (!id) continue
+    const fb = fallback.find((p) => p.externalId === id)
+    const lat = typeof r.latitude === 'number' ? r.latitude : fb?.latitude ?? 47.52
+    const lng = typeof r.longitude === 'number' ? r.longitude : fb?.longitude ?? -122.2
+    const name = typeof r.name === 'string' && r.name.trim() !== '' ? r.name.trim() : fb?.name ?? id
+    out.push({ externalId: id, name, latitude: lat, longitude: lng })
+  }
+  return out.length > 0 ? out : fallback
+}

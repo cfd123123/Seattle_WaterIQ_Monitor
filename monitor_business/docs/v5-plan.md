@@ -14,17 +14,15 @@
 
 **范围**：
 
-- 新增 `monitor_station`（站点主数据）。
-- 扩展 `water_quality_record`：
-  - `station_id`（可空，兼容现有 API）
-  - `sample_time`（可空，区分采样时间与写入时间）
-- （可选）扩展 `alert_event.station_id` 冗余字段（便于地图聚合）。
-- 增加常用索引：`(station_id, sample_time)`、`(station_id, create_time)`。
+- **`monitor_station`**：站点主数据（已在当前代码落地）。
+- **`water_quality_record`**：已从应用模型移除；不再作为 Phase 1 扩展对象。
+- **`alert_event.station_id`**：冗余字段（已支持，便于地图聚合）。
+- 若未来重新引入「检测事实表」，再单独设计迁移与索引（如 `(station_id, sample_time)`）。
 
 **验收标准**：
 
 - 应用可启动，DDL 自动升级成功。
-- 现有 `/api/check`、`/api/alerts`、`/api/stats/*` 不回归。
+- 现有 **`/api/alerts`**、**`/api/stats/*`** 等不回归（`/api/check` 非当前主路径）。
 - `docs/database-schema.md` 与代码实体一致。
 
 ---

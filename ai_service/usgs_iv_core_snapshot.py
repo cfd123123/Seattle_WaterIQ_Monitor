@@ -26,7 +26,7 @@ _CORE_IMPUTE_FALLBACK: dict[str, float] = {
     "63680": 1.9,
 }
 
-_ANOMALY_PKL = Path(__file__).resolve().parent / "usgs_anomaly_iforest_v1.pkl"
+_ANOMALY_PKL = Path(__file__).resolve().parent / "models" / "usgs_anomaly_iforest_v1.pkl"
 
 
 def _load_imputation_defaults() -> dict[str, float]:

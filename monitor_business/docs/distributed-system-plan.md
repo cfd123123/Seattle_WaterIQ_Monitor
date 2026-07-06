@@ -42,6 +42,28 @@ Establish measurable performance and reliability baselines before architecture c
 - Team can identify top latency bottlenecks with evidence.
 - SLO targets are agreed and documented.
 
+### Personal Project Baseline Checklist (Lightweight)
+
+Use this lightweight checklist for low-traffic personal projects. It is enough to decide whether async/MQ is justified.
+
+- Record baseline for these 6 APIs:
+  - `GET /api/map/stations`
+  - `GET /api/stats/trend`
+  - `GET /api/stats/overview`
+  - `POST /api/forecast/series` (single-station forecast)
+  - `POST /api/usgs/iv/refresh` (heavy job)
+  - `POST /api/usgs/turbidity-threshold/scan` (heavy job)
+- For each API, capture:
+  - average latency
+  - P95 latency
+  - error rate
+  - timeout rate (e.g. >10s counted as timeout)
+- Set practical thresholds:
+  - read APIs: P95 < 500ms (or <1s on local env)
+  - light write APIs: P95 < 2s
+  - heavy jobs: if sync request often > 5-10s, move to async
+- Save one markdown report under `docs/` (date-stamped) for future comparison.
+
 ## Phase 1 - Modular Monolith + Async Task Framework (1-2 weeks)
 
 ### Objective
@@ -84,19 +106,20 @@ Improve response speed and prevent duplicate heavy job execution.
 
 ### Scope
 
-- Cache hot read endpoints (overview/trend/topN as appropriate).
-- Add distributed lock for duplicate submissions.
-- Add idempotency keys for task submission.
+- **Read cache (this project)**: Redis cache **only** for `GET /api/stats/trend`.  Overview (`/api/stats/overview`), TopN (`/api/stats/station-alert-top`), and other reads stay uncached unless a future phase needs them.
+- **Duplicate task submissions**:
+  - **Chosen for this repo**: database unique constraint on `(task_type, idempotency_key)` plus optional `Idempotency-Key` header on task POST APIs.
+  - **Alternative (not required now)**: Redis-based distributed lock for the same purpose if you later need cross-process coordination without leaning on DB uniqueness.
 
 ### Deliverables
 
-- Redis integration for cache and lock primitives.
-- Cache invalidation strategy documented per endpoint.
+- Redis integration for Spring Cache (trend cache name: `statsTrend`).
+- **When to invalidate trend cache (plain language)**: cached trend answers the question “what does the chart show **right now**?”. After data-changing jobs succeed (e.g. IV refresh, batch forecast), the app **clears** the `statsTrend` cache so the next `GET /api/stats/trend` recomputes from the DB. Entries also **expire** after a short TTL (see `water.cache.trend-ttl-seconds`). No separate “per-endpoint invalidation matrix” is required beyond this.
 
 ### Exit Criteria
 
-- Hot-path API latency improves and stabilizes.
-- Duplicate task submissions are suppressed reliably.
+- Trend read latency improves under repeat queries (cache hit path).
+- Duplicate task submissions with the same idempotency key are suppressed reliably.
 
 ## Phase 3 - Message Queue Introduction (1-2 weeks)
 
@@ -115,7 +138,7 @@ Queue heavy jobs for burst control, decoupled execution, and robust retries.
 
 - Queue topology and routing design.
 - Retry/backoff and DLQ handling.
-- Operational runbook for failed jobs.
+- Operational runbook for failed jobs（本仓库：`monitor_business/docs/mq-runbook.md`；架构与实现见同目录 `MQ使用.md`）。
 
 ### Exit Criteria
 
@@ -188,7 +211,7 @@ Enable standardized deployment and scaling under production load.
 ## What to Do First (Recommended Sequence)
 
 1. Complete Phase 1 (async task framework in current codebase).
-2. Add Phase 2 (Redis for cache + lock + idempotency).
+2. Add Phase 2 (Redis cache for trend + DB idempotency; Redis lock remains optional).
 3. Introduce Phase 3 (MQ) once backlog and concurrency justify it.
 4. Split services in Phase 4 only after operational signals are stable.
 
@@ -197,8 +220,6 @@ Enable standardized deployment and scaling under production load.
 - This roadmap is iterative and should be revisited after each phase review.
 - Architecture decisions should be justified by measured bottlenecks and reliability needs.
 
-  
-  
 **阶段 0：基线与准备（1 周）**
 
 **目标**：先量化现状，避免盲改。  
@@ -249,19 +270,26 @@ Enable standardized deployment and scaling under production load.
 
 ---
 
-## **阶段 2：引入 Redis（缓存 + 分布式锁）（1 周）**
+## **阶段 2：引入 Redis（缓存 + 协调）（1 周）**
 
 **目标**：提升查询性能，避免重复任务。  
-**交付物**：
+**范围（与本仓库实现对齐）**：
 
-- Redis 缓存热点查询（趋势/TopN/概览）
-- 分布式锁（防重复提交同类重任务）
-- 幂等键（同参数短时间内只受理一次）
+- **读缓存**：**仅**对 `GET /api/stats/trend` 使用 Redis（缓存名 `statsTrend`）。  
+概览、TopN 等接口**本阶段不做** Redis 缓存，除非后续真有瓶颈再加。
+- **防重复提交（本仓库采用）**：任务提交接口支持 `**Idempotency-Key` 请求头** + 数据库 `**(task_type, idempotency_key)` 唯一约束**，重复相同 key 时返回已有任务、不重复入队。
+- **备选方案（未采用）**：用 **Redis 分布式锁** 达到类似“同类任务同时只跑一份”的效果；需要跨进程强协调、又不想依赖 DB 唯一键时再考虑。
+
+**「缓存失效」是什么意思（白话）**：
+
+- 缓存里存的是**上一时刻**算好的趋势结果。若后台任务**改写了底层数据**（例如 IV 刷新、批量预测成功），继续用旧缓存就会**图表与数据库不一致**。
+- **失效** = **删掉或过期这份缓存**，让下一次 `GET /api/stats/trend` **重新查库计算**，用户看到新数据。  
+本仓库：**相关异步任务成功后会清空 `statsTrend` 全缓存**；同时趋势缓存还有 **TTL**（`water.cache.trend-ttl-seconds`），时间到了也会自动过期。
 
 **验收标准**：
 
-- 热点接口响应稳定下降
-- 重复点击“运行批量”不会生成重复执行
+- 趋势接口在重复查询下响应更稳、更省 DB（命中缓存时）
+- 相同 `Idempotency-Key` 的重复提交不会产生第二个并行任务
 
 ---
 
@@ -271,9 +299,10 @@ Enable standardized deployment and scaling under production load.
 **交付物**：
 
 - Producer（API 提交任务到队列）
-- Consumer（Worker 消费任务）
+- Consumer（**独立 Worker 进程**消费任务；与 API 同 JAR、`worker` profile，见 `docs/MQ使用.md`）
 - 重试策略 + 死信队列（DLQ）
 - 任务状态回写 DB
+- 失败任务运维手册（Runbook）：`docs/mq-runbook.md`
 
 **建议优先 RabbitMQ**（实现快、运维成本低）  
 Kafka 可在吞吐要求更高时再上。
@@ -294,6 +323,9 @@ Kafka 可在吞吐要求更高时再上。
 - `ai-inference-service`（Python，无状态推理）
 - `task-worker`（消费队列执行任务）
 - `api-gateway`（统一入口，鉴权、限流、路由）
+
+> 当前仓库可运行拆分版本：`docs/phase4-service-split.md`（`docker-compose.phase4.yml` + **Spring Cloud Gateway**）。  
+> Java 与前端目录分离见仓库根 `monitor_business/README.md`（`backend/` + `frontend/`）。
 
 **数据库策略**：
 
@@ -333,3 +365,38 @@ Kafka 可在吞吐要求更高时再上。
 - HPA（按 CPU/队列长度扩容 worker）
 - 灰度发布/回滚策略
 
+## 你项目的 API + Worker 数据流图”
+
+**什么是“独立 worker 进程”**
+  现在你的异步任务是：
+
+- API 服务（Spring）收到请求后
+- 在**同一个进程里**开线程去跑任务
+“独立 worker 进程”是指：
+- API 服务只负责“接单 + 写任务状态”
+- 另一个**单独运行的进程**专门“干活”（消费任务、执行预测/刷新）
+
+## **两种模式对比**
+
+### **1) 当前模式（同进程线程池）**
+
+- 优点：实现快、简单
+- 缺点：
+  - API 进程挂了，任务也受影响
+  - 重任务会和 API 抢 CPU/内存
+  - 不方便单独扩容“干活能力”
+
+### **2) 独立 worker 进程（推荐后续）**
+
+- 优点：
+  - API 和任务执行隔离，互不拖垮
+  - 可单独扩 worker 数量
+  - 更接近真正分布式架构
+- 缺点：部署和运维稍复杂一点
+
+1. Frontend -> POST /api/tasks/iv-refresh
+2. API: insert async_task(status=PENDING)
+3. Worker: 轮询拿到 PENDING -> 改 RUNNING(progress=10)
+4. Worker: 调 Python 刷新、可选阈值扫描
+5. Worker: 成功写 SUCCEEDED(result_json)；失败写 FAILED(error)
+6. Frontend 轮询 GET /api/tasks/{id} 展示进度/结果

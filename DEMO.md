@@ -99,17 +99,4 @@ In GitHub **Settings → General**, you can enable *Private vulnerability report
 
 ---
 
-## 5. FAQ
-
-**Q: Will a public repo leak training data?**  
-A: `.gitignore` excludes `data/`, `reports/`, and `.pkl`; only source and minimal ops doc `ai_service/docs/turbidity_operations.md` are committed.
-
-**Q: Copilot does nothing after clone?**  
-A: Check `curl http://localhost:8000/assistant/health` (or the project's health endpoint); confirm Ollama is running and run `python -m assistant.rag.indexer --rebuild`.
-
-**Q: Can I run entirely in the cloud?**  
-A: Yes, but you need a cloud host and optionally an OpenAI-compatible API. For local development, **Docker Compose + Ollama** is the simplest path.
-
----
-
 *Keep this document in sync with repo `.gitignore` and `DEFAULT_RAG_DOC_REL_PATHS` in `assistant/config.py`.*

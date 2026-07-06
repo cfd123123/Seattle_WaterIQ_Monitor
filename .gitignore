@@ -1,9 +1,9 @@
 # =============================================================================
 # Public-repo hygiene: keep source + minimal ops docs; exclude local data/artifacts.
-# See DEMO.md for HR reviewer workflow and safe push checklist.
+# See DEMO.md for local demo walkthrough and safe-push checklist.
 # =============================================================================
 
-# --- Local-only notes at repo root (keep docs/screenshots/ for HR demo assets) ---
+# --- Local-only notes at repo root (keep docs/screenshots/ for optional demo captures) ---
 /docs/*
 !/docs/screenshots/
 !/docs/screenshots/**
@@ -44,7 +44,7 @@ dist-ssr/
 # --- IDE, editor, and OS junk (repo root only; subprojects may have their own) ---
 /.vscode/
 /.idea/
-/.cursor/
+.cursor/
 *.swp
 *.swo
 .DS_Store

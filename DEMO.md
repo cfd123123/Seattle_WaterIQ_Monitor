@@ -88,6 +88,7 @@ git check-ignore -v ai_service/.env.local                        # should be ign
 
 ```bash
 # If large files were committed historically, remove from index only (keeps local files)
+git rm -r --cached .cursor/ 2>/dev/null || true
 git rm -r --cached ai_service/reports/ 2>/dev/null || true
 git rm -r --cached ai_service/plan/ 2>/dev/null || true
 git rm --cached ai_service/models/*.pkl 2>/dev/null || true

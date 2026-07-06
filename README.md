@@ -48,15 +48,8 @@ For local startup, Docker, and phased rollout details, see **[monitor_business/R
 
 ---
 
-## For reviewers / HR
+## Getting started
 
-A **near-zero-cost** demo guide for recruiters and technical reviewers (public GitHub, 2-minute screen-recording script, screenshot folder, features that work without an LLM) is in **[DEMO.md](./DEMO.md)**.
+See **[DEMO.md](./DEMO.md)** for a local Docker Compose walkthrough, optional [Ollama](https://ollama.com) setup for Copilot, and a safe-push checklist.
 
-| Resource | Description |
-|----------|-------------|
-| [DEMO.md](./DEMO.md) | Reviewer demo guide and safe push checklist |
-| `docs/screenshots/` | Suggested 3–5 admin-console screenshots (forecast page, Copilot, alerts/map) |
-| Demo video (optional) | Record per DEMO §3, then add the link in this table or at the end of DEMO |
-
-**Verifiable without an LLM**: After Docker Compose startup — **forecast curves**, **turbidity monitoring**, **alerts and map**.  
-**Copilot / AI explanations** require local [Ollama](https://ollama.com) or your own API key (see `ai_service/.env.example`).
+After startup, core UI features work without an LLM: **forecast curves**, **turbidity monitoring**, **alerts and map**. Copilot and AI text explanations require local Ollama or your own API key (see `ai_service/.env.example`).

@@ -1,0 +1,29 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      routes:
+        - id: monitor-api
+          uri: ${GATEWAY_MONITOR_URI:http://monitor-service:8080}
+          predicates:
+            - Path=/api/**
+        - id: ai-inference
+          uri: ${GATEWAY_AI_URI:http://ai-inference-service:8000}
+          predicates:
+            - Path=/ai/**
+          filters:
+            - StripPrefix=1
+
+# Gateway health: /actuator/health. Do not forward all /actuator/** to monitor or you will hide this app's Actuator.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      show-details: always

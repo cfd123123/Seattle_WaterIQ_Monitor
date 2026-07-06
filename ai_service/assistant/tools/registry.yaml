@@ -1,0 +1,96 @@
+# Declarative read-only tool schemas for L3 agent (OpenAI function-calling format).
+# Loaded by assistant/tools/registry.py — no write tools allowed.
+
+tools:
+  - name: get_turbidity_risk_forecast_12h
+    description: >
+      Fetch the Phase B 12-hour turbidity alert-risk forecast for a USGS site.
+      Returns recommend_alert, max_tier_forecast, tier_at_t, and related frozen decision fields.
+      Phase B is currently wired for site 12117500 only.
+    parameters:
+      type: object
+      properties:
+        site_no:
+          type: string
+          description: USGS 8-digit site number (e.g. 12117500).
+        reference_utc:
+          type: string
+          description: Optional ISO UTC hour for the reference time; default is latest in features CSV.
+      required:
+        - site_no
+
+  - name: get_forecast_series
+    description: >
+      Fetch IV-based short-horizon forecast series for discharge (00060) or turbidity (63680).
+      Returns history and forecast points for charting; read-only.
+    parameters:
+      type: object
+      properties:
+        site_no:
+          type: string
+          description: USGS 8-digit site number.
+        parameter_cd:
+          type: string
+          description: NWIS parameter code — only 00060 (discharge) or 63680 (turbidity).
+        horizon_hours:
+          type: integer
+          description: Forecast horizon in hours (1–168).
+        history_days:
+          type: integer
+          description: History window in days for the chart (default 30).
+      required:
+        - site_no
+        - parameter_cd
+        - horizon_hours
+
+  - name: get_assistant_health
+    description: Report assistant module status, LLM configuration, and RAG index readiness.
+    parameters:
+      type: object
+      properties: {}
+
+  - name: get_turbidity_state_snapshot
+    description: >
+      Current turbidity alert tier, legacy four-state label, NTU, 1h delta, and 6h/12h rule-warning
+      flags at one reference hour (default latest in features CSV). Uses turbidity-state v2.1 rules.
+    parameters:
+      type: object
+      properties:
+        site_no:
+          type: string
+          description: USGS 8-digit site number (features/thresholds must exist for the site).
+        reference_utc:
+          type: string
+          description: Optional ISO UTC hour for the snapshot cutoff; default is latest hour.
+        thresholds_json_path:
+          type: string
+          description: Optional path to frozen state_thresholds.json; estimated from tuning data if omitted.
+        features_csv_path:
+          type: string
+          description: Optional features CSV path; defaults to the site 12117500 training file.
+      required:
+        - site_no
+
+  - name: list_puget_default_sites
+    description: >
+      List USGS sites in the Puget Sound / greater Seattle demo config used by IV fetch and the monitor UI.
+      Returns region_label and site_no/name pairs.
+    parameters:
+      type: object
+      properties: {}
+
+  - name: search_ops_docs
+    description: >
+      BM25 search over indexed turbidity operations documentation (plans, runbooks, Phase B policy).
+      Returns top matching excerpts with source refs for citation.
+    parameters:
+      type: object
+      properties:
+        query:
+          type: string
+          description: Natural-language search query (e.g. escalate_12h persistence, Phase B policy).
+        top_k:
+          type: integer
+          description: Number of chunks to return (1–10; default from ASSISTANT_RAG_TOP_K).
+      required:
+        - query

@@ -1,5 +1,5 @@
-# Prometheus 抓取宿主机上的 Spring Boot Actuator（需本机先启动应用 :8080）
-# Docker 内使用 host.docker.internal（Linux 需在 compose 中为 prometheus 配置 extra_hosts: host-gateway）
+# Scrape monitor-service in the same Docker network as the business stack (use when full compose stack is up).
+# If Spring runs only on the host without the monitor-service container, set targets to e.g. host.docker.internal:18080.
 global:
   scrape_interval: 15s
 
@@ -9,4 +9,4 @@ scrape_configs:
     scrape_interval: 15s
     static_configs:
       - targets:
-          - host.docker.internal:8080
+          - monitor-service:8080

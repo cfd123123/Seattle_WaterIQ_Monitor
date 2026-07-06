@@ -1,4 +1,4 @@
-# 从仓库内 JSON 加载大盘（可 UI 编辑；updateInterval 内会同步文件变更）
+# Load dashboards from JSON in this repo; file edits sync within updateInterval.
 apiVersion: 1
 providers:
   - name: water-business

@@ -1,4 +1,4 @@
-# 本地单节点 Tempo（OTLP HTTP 4318 / gRPC 4317 → 查询 HTTP 3200）
+# Single-node Tempo for local dev (OTLP HTTP 4318 / gRPC 4317; query HTTP 3200)
 server:
   http_listen_port: 3200
 

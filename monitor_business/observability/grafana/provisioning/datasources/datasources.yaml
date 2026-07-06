@@ -1,4 +1,6 @@
-# Tempo + Prometheus（compose 内 prom 抓取宿主机 :8080/actuator/prometheus）
+# Tempo (traces) + Prometheus (metrics query API).
+# Scrape targets are not configured here; see ../../../prometheus/prometheus.yml (default: monitor-service:8080/actuator/prometheus on the Compose network).
+# Point Grafana at Prometheus (/api/v1/*), not at Spring Actuator URLs.
 apiVersion: 1
 datasources:
   - name: Tempo

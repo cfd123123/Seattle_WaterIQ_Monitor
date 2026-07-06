@@ -14,8 +14,12 @@ import { CircleMarker, MapContainer, Popup, TileLayer } from 'react-leaflet'
 import { Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { useLocale } from './locale/LocaleContext'
 import { t as translate, type Locale } from './locale/messages'
-import { PUGET_DEMO_SITES } from './pugetDemoSites'
+import CopilotWidget from './CopilotWidget'
+import { mergePugetSitesFromApi, PUGET_DEMO_SITES } from './pugetDemoSites'
 import './App.css'
+
+// Same base URL as Vite dev proxy (Swagger UI is served by Spring, not under /api).
+const devBackendOrigin = import.meta.env.VITE_API_PROXY_TARGET ?? 'http://localhost:18080'
 
 type ApiResponse<T> = {
   code: string
@@ -92,6 +96,16 @@ type StatsOverviewApiData = {
   uptimePercent30d?: number
 }
 
+type AsyncTaskApiData = {
+  taskId: string
+  status: 'PENDING' | 'RUNNING' | 'RETRYING' | 'SUCCEEDED' | 'FAILED' | 'CANCELLED'
+  progressPercent?: number
+  retryCount?: number
+  currentStep?: string | null
+  errorMessage?: string | null
+  result?: unknown
+}
+
 type StationForm = {
   stationCode: string
   stationName: string
@@ -153,6 +167,211 @@ type SiteParamAnomalyIvResult = {
   is_anomaly?: boolean | null
   alert_created?: boolean | null
   alert_reason?: string | null
+}
+
+type TurbidityStateHorizonDto = {
+  ruleFires?: boolean
+  rule_fires?: boolean
+}
+
+/** `/api/usgs/turbidity-state/*` snapshot (camelCase from Spring). */
+type TurbidityStateSnapshotDto = {
+  siteNo?: string
+  site_no?: string
+  modelVersion?: string
+  model_version?: string
+  referenceUtc?: string
+  reference_utc?: string
+  turbidityNtu?: number
+  /** Python NWIS parameter key when snapshot is not re-serialized by Java. */
+  '63680'?: number
+  state?: string
+  alertTier?: string
+  alert_tier?: string
+  isAnomaly?: boolean
+  is_anomaly?: boolean
+  warningHorizons?: Record<string, TurbidityStateHorizonDto>
+  warning_horizons?: Record<string, TurbidityStateHorizonDto>
+  thresholds?: {
+    thetaLow?: number
+    theta_low?: number
+    thetaHigh?: number
+    theta_high?: number
+  }
+}
+
+type TurbidityStateCheckDto = {
+  snapshot?: TurbidityStateSnapshotDto
+  alertCreated?: boolean
+  alert_created?: boolean
+  alertReason?: string
+  alert_reason?: string
+}
+
+/** `/api/usgs/turbidity-risk/risk-explain` response `data` (12h persistence risk + optional LLM summary). */
+type TurbidityRiskHorizonTierDto = {
+  horizonH?: number
+  horizon_h?: number
+  tier?: string
+}
+
+type TurbidityRiskForecast12hDto = {
+  siteNo?: string
+  site_no?: string
+  referenceUtc?: string
+  reference_utc?: string
+  tierAtT?: string
+  tier_at_t?: string
+  alert12hForecast?: number
+  alert_12h_forecast?: number
+  maxTierForecast?: string
+  max_tier_forecast?: string
+  recommendAlert?: boolean
+  recommend_alert?: boolean
+  rationaleTemplateKey?: string
+  rationale_template_key?: string
+  horizonTiers?: TurbidityRiskHorizonTierDto[]
+  horizon_tiers?: TurbidityRiskHorizonTierDto[]
+  modelVersion?: string
+  model_version?: string
+  explanationText?: string
+  explanation_text?: string
+  explanationModel?: string
+  explanation_model?: string
+  explanationProvider?: string
+  explanation_provider?: string
+  explanationGeneratedAt?: string
+  explanation_generated_at?: string
+  explanationError?: string
+  explanation_error?: string
+}
+
+/** `/api/usgs/anomaly/site-param-multivar/check` response `data`. */
+type TurbidityMultivarIfResult = {
+  site_no?: string
+  siteNo?: string
+  anomaly_available?: boolean | null
+  anomalyAvailable?: boolean | null
+  reason?: string | null
+  samples_used?: number | null
+  samplesUsed?: number | null
+  sample_timestamp?: string | null
+  sampleTimestamp?: string | null
+  model_version?: string | null
+  modelVersion?: string | null
+  is_anomaly?: boolean | null
+  isAnomaly?: boolean | null
+}
+
+const TURBIDITY_STATE_SITE = '12117500'
+const TURBIDITY_GAP_TIERS = new Set(['SENSOR_GAP', 'DATA_STALE', 'UNKNOWN'])
+
+function readTurbidityNtu(raw: TurbidityStateSnapshotDto): number | undefined {
+  const v = raw.turbidityNtu ?? raw['63680']
+  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+function formatTurbidityNtu(ntu: number | undefined): string {
+  if (ntu == null) return '—'
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(ntu)
+}
+
+function normalizeTurbidityRiskForecast(raw: TurbidityRiskForecast12hDto) {
+  const horizons = raw.horizonTiers ?? raw.horizon_tiers ?? []
+  return {
+    alert12h: Boolean(raw.alert12hForecast ?? raw.alert_12h_forecast),
+    maxTier: raw.maxTierForecast ?? raw.max_tier_forecast ?? '—',
+    recommendAlert: Boolean(raw.recommendAlert ?? raw.recommend_alert),
+    rationaleKey: raw.rationaleTemplateKey ?? raw.rationale_template_key ?? '',
+    tierAtT: raw.tierAtT ?? raw.tier_at_t ?? '—',
+    horizons: horizons.map((h) => ({
+      h: h.horizonH ?? h.horizon_h ?? 0,
+      tier: h.tier ?? 'NORMAL',
+    })),
+    explanationText: raw.explanationText ?? raw.explanation_text ?? '',
+    explanationError: raw.explanationError ?? raw.explanation_error ?? '',
+  }
+}
+
+function turbidityRiskLevelLabel(locale: Locale, alert12h: boolean, recommendAlert: boolean): string {
+  const key = recommendAlert ? 'levelAlert' : alert12h ? 'levelWatch' : 'levelLow'
+  return translate(locale, `forecast.turbidityRisk.${key}`)
+}
+
+function normalizeTurbidityStateSnapshot(raw: TurbidityStateSnapshotDto) {
+  const horizons = raw.warningHorizons ?? raw.warning_horizons
+  const th = raw.thresholds
+  return {
+    siteNo: String(raw.siteNo ?? raw.site_no ?? ''),
+    modelVersion: raw.modelVersion ?? raw.model_version ?? '—',
+    referenceUtc: raw.referenceUtc ?? raw.reference_utc ?? '—',
+    ntu: readTurbidityNtu(raw),
+    alertTier: raw.alertTier ?? raw.alert_tier ?? raw.state ?? '—',
+    isAnomaly: Boolean(raw.isAnomaly ?? raw.is_anomaly),
+    horizons,
+    thetaLow: th?.thetaLow ?? th?.theta_low,
+    thetaHigh: th?.thetaHigh ?? th?.theta_high,
+  }
+}
+
+function turbidityStateLabel(locale: Locale, tierOrState: string): string {
+  const key = `forecast.stateName.${tierOrState}`
+  const tr = translate(locale, key)
+  return tr !== key ? tr : tierOrState
+}
+
+function turbidityStateSiteOnlyMessage(locale: Locale): string {
+  return locale === 'zh'
+    ? `浊度检测当前仅支持站点 ${TURBIDITY_STATE_SITE}（特征 CSV 为该站）；请将 site_no 改为 ${TURBIDITY_STATE_SITE} 或从下拉选择 Cedar River。`
+    : `Turbidity detection is only wired for site ${TURBIDITY_STATE_SITE}; set site_no accordingly.`
+}
+
+function isGapTier(tier: string): boolean {
+  return TURBIDITY_GAP_TIERS.has(tier.trim().toUpperCase())
+}
+
+function isElevatedQualityTier(tier: string): boolean {
+  const t = tier.trim().toUpperCase()
+  return t === 'WATCH' || t === 'HIGH' || t === 'CRITICAL'
+}
+
+function multivarReasonLabel(locale: Locale, reason: string | null | undefined): string {
+  if (!reason) return '—'
+  const key = `forecast.multivarReason.${reason}`
+  const tr = translate(locale, key)
+  return tr !== key ? tr : reason
+}
+
+function turbidityFusionMessageKey(
+  tier: string,
+  multivar: { available: boolean; isAnomaly: boolean | null }
+): string {
+  if (isGapTier(tier)) return 'forecast.turbFusion.gap'
+  const elevated = isElevatedQualityTier(tier)
+  if (!multivar.available) {
+    return elevated ? 'forecast.turbFusion.elevated_mv_unavail' : 'forecast.turbFusion.normal_mv_unavail'
+  }
+  if (multivar.isAnomaly) {
+    return elevated ? 'forecast.turbFusion.elevated_anom' : 'forecast.turbFusion.normal_anom'
+  }
+  return elevated ? 'forecast.turbFusion.elevated_ok' : 'forecast.turbFusion.normal_ok'
+}
+
+function turbidityFusionMessage(
+  locale: Locale,
+  tier: string,
+  multivar: { available: boolean; isAnomaly: boolean | null }
+): string {
+  return translate(locale, turbidityFusionMessageKey(tier, multivar))
+}
+
+function tierSeverityClass(tier: string): string {
+  const t = tier.trim().toUpperCase()
+  if (t === 'CRITICAL') return 'turbidity-tier--critical'
+  if (t === 'HIGH') return 'turbidity-tier--high'
+  if (t === 'WATCH') return 'turbidity-tier--watch'
+  if (t === 'NORMAL') return 'turbidity-tier--normal'
+  return 'turbidity-tier--gap'
 }
 
 function forecastReasonLabel(locale: Locale, reason: string | null | undefined): string {
@@ -279,6 +498,22 @@ function apiErrorMessage(e: unknown, fallback: string): string {
   if (isAxiosError(e)) {
     const status = e.response?.status
     const data = e.response?.data as ApiResponse<unknown> | Record<string, unknown> | string | undefined
+    if (typeof data === 'string' && data.trim().length > 0) {
+      const snippet = data.length > 280 ? `${data.slice(0, 277)}…` : data
+      return status != null ? `${fallback}：${snippet}（HTTP ${status}）` : `${fallback}：${snippet}`
+    }
+    if (typeof data === 'object' && data != null && 'detail' in data) {
+      const d = (data as { detail?: unknown }).detail
+      const detailStr =
+        typeof d === 'string'
+          ? d
+          : d != null && typeof JSON.stringify === 'function'
+            ? JSON.stringify(d)
+            : String(d)
+      if (detailStr.length > 0) {
+        return status != null ? `${detailStr}（HTTP ${status}）` : detailStr
+      }
+    }
     if (typeof data === 'object' && data != null && 'message' in data) {
       const msg = (data as ApiResponse<unknown>).message
       if (typeof msg === 'string' && msg.length > 0 && msg !== 'OK') {
@@ -312,6 +547,16 @@ function formatUptimePercentLabel(percent: number | null | undefined): string {
   if (percent == null || !Number.isFinite(percent) || percent < 0) return '—'
   const capped = Math.min(100, Math.max(0, percent))
   return `${capped.toFixed(1)}%`
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms))
+}
+
+function taskProgressLabel(task: AsyncTaskApiData, locale: Locale): string {
+  const p = Number.isFinite(task.progressPercent) ? Number(task.progressPercent) : 0
+  const step = task.currentStep ?? ''
+  return locale === 'zh' ? `任务进行中 ${p}% · ${step}` : `Task running ${p}% · ${step}`
 }
 
 function parseAlertDetail(detail: string | null | undefined): AlertDetailKv {
@@ -560,6 +805,26 @@ function App() {
       }, 80)
     }
   }, [location.pathname, location.hash])
+  /** Puget IV demo sites: loaded from GET /api/demo/puget-sites (ai_service JSON); falls back to static list. */
+  const [pugetDemoSites, setPugetDemoSites] = useState(PUGET_DEMO_SITES)
+
+  useEffect(() => {
+    let cancelled = false
+    void (async () => {
+      try {
+        const res = await http.get<ApiResponse<{ sites?: unknown[] }>>('/demo/puget-sites')
+        const sites = res.data.data?.sites
+        const merged = mergePugetSitesFromApi(sites, PUGET_DEMO_SITES)
+        if (!cancelled) setPugetDemoSites(merged)
+      } catch {
+        if (!cancelled) setPugetDemoSites(PUGET_DEMO_SITES)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
   const [stations, setStations] = useState<MapStationPoint[]>([])
   const [alerts, setAlerts] = useState<AlertItem[]>([])
   const [trend, setTrend] = useState<TrendPoint[]>([])
@@ -602,16 +867,35 @@ function App() {
     null
   )
   const [siteParamAnomalyErr, setSiteParamAnomalyErr] = useState<string | null>(null)
+  const [turbidityStateLoading, setTurbidityStateLoading] = useState(false)
+  const [turbidityStateErr, setTurbidityStateErr] = useState<string | null>(null)
+  const [turbidityStateCheck, setTurbidityStateCheck] = useState<TurbidityStateCheckDto | null>(null)
+  const [turbidityDetectionActive, setTurbidityDetectionActive] = useState(false)
+  const [turbidityMultivarLoading, setTurbidityMultivarLoading] = useState(false)
+  const [turbidityMultivarErr, setTurbidityMultivarErr] = useState<string | null>(null)
+  const [turbidityMultivarResult, setTurbidityMultivarResult] = useState<TurbidityMultivarIfResult | null>(
+    null
+  )
+  const [turbidityRiskLoading, setTurbidityRiskLoading] = useState(false)
+  const [turbidityRiskErr, setTurbidityRiskErr] = useState<string | null>(null)
+  const [turbidityRiskForecast, setTurbidityRiskForecast] = useState<TurbidityRiskForecast12hDto | null>(
+    null
+  )
   const [autoForecastSettings, setAutoForecastSettings] = useState<AutoForecastSettingsDto | null>(null)
   const [autoForecastSaving, setAutoForecastSaving] = useState(false)
   const [autoForecastRunLoading, setAutoForecastRunLoading] = useState(false)
   /** One-line hint after “run batch now” so feedback is visible without only “last run” block. */
   const [autoForecastRunHint, setAutoForecastRunHint] = useState<string | null>(null)
+  const [autoForecastTaskProgress, setAutoForecastTaskProgress] = useState<string | null>(null)
+  const [autoForecastRunningTaskId, setAutoForecastRunningTaskId] = useState<string | null>(null)
   /** Last batch rows from “run now” (table + sparklines). */
   const [autoForecastBatchResults, setAutoForecastBatchResults] = useState<AutoForecastBatchItemDto[] | null>(null)
-  const [ivRefreshDays, setIvRefreshDays] = useState('30')
+  /** Default 60d: hourly forecast needs enough IV points after resample (see ai_service MIN_HOURLY_POINTS). */
+  const [ivRefreshDays, setIvRefreshDays] = useState('60')
   const [ivRunChecksAfter, setIvRunChecksAfter] = useState(false)
   const [ivRefreshLoading, setIvRefreshLoading] = useState(false)
+  const [ivRefreshTaskProgress, setIvRefreshTaskProgress] = useState<string | null>(null)
+  const [ivRefreshRunningTaskId, setIvRefreshRunningTaskId] = useState<string | null>(null)
   const [ivRefreshErr, setIvRefreshErr] = useState<string | null>(null)
   const [ivRefreshResult, setIvRefreshResult] = useState<{
     rows: number
@@ -762,14 +1046,45 @@ function App() {
     setAutoForecastRunLoading(true)
     setForecastErr(null)
     setAutoForecastRunHint(null)
+    setAutoForecastTaskProgress(null)
     setAutoForecastBatchResults(null)
     try {
-      const res = await http.post<ApiResponse<AutoForecastRunNowDto>>(
-        '/forecast/auto-settings/run-now',
+      const submitRes = await http.post<ApiResponse<AsyncTaskApiData>>(
+        '/tasks/forecast-batch-run-now',
         {},
-        { timeout: 1_800_000 }
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } }
       )
-      const body = res.data?.data
+      const taskId = submitRes.data.data?.taskId
+      if (!taskId) {
+        setForecastErr(translate(locale, 'forecast.batchNoSettings'))
+        return
+      }
+      setAutoForecastRunningTaskId(taskId)
+      setAutoForecastRunHint(locale === 'zh' ? '任务已提交，等待完成…' : 'Task submitted, waiting...')
+      const finalTask = await waitTaskDone(taskId, 1_800_000, (t) =>
+        setAutoForecastTaskProgress(taskProgressLabel(t, locale))
+      )
+      setAutoForecastTaskProgress(null)
+      if (finalTask.status === 'CANCELLED') {
+        setForecastErr(locale === 'zh' ? '任务已取消' : 'Task cancelled')
+        return
+      }
+      if (finalTask.status === 'FAILED') {
+        const msg = finalTask.errorMessage?.trim()
+        setForecastErr(msg && msg !== '' ? msg : translate(locale, 'errors.runBatchFailed'))
+        return
+      }
+      const bodyRaw = (finalTask.result ?? null) as {
+        settings?: AutoForecastSettingsDto
+        batch_results?: AutoForecastBatchItemDto[]
+        batchResults?: AutoForecastBatchItemDto[]
+      } | null
+      const body: AutoForecastRunNowDto | null = bodyRaw == null
+        ? null
+        : {
+            settings: bodyRaw.settings ?? ({} as AutoForecastSettingsDto),
+            batch_results: bodyRaw.batch_results ?? bodyRaw.batchResults ?? [],
+          }
       if (body?.settings != null) {
         const next = body.settings
         setAutoForecastSettings((prev) => ({
@@ -792,9 +1107,30 @@ function App() {
       }
     } catch (e) {
       setForecastErr(apiErrorMessage(e, translate(locale, 'errors.runBatchFailed')))
+      setAutoForecastTaskProgress(null)
     } finally {
       setAutoForecastRunLoading(false)
+      setAutoForecastRunningTaskId(null)
     }
+  }
+
+  async function waitTaskDone(
+    taskId: string,
+    timeoutMs = 240_000,
+    onProgress?: (task: AsyncTaskApiData) => void
+  ): Promise<AsyncTaskApiData> {
+    const started = Date.now()
+    let last: AsyncTaskApiData | null = null
+    while (Date.now() - started < timeoutMs) {
+      const r = await http.get<ApiResponse<AsyncTaskApiData>>(`/tasks/${encodeURIComponent(taskId)}`)
+      last = r.data.data
+      onProgress?.(last)
+      if (last.status === 'SUCCEEDED' || last.status === 'FAILED' || last.status === 'CANCELLED') {
+        return last
+      }
+      await sleep(1500)
+    }
+    throw new Error(last?.status ? `TASK_TIMEOUT_${last.status}` : 'TASK_TIMEOUT')
   }
 
   const refreshAll = useCallback(async () => {
@@ -839,19 +1175,48 @@ function App() {
     }
     setIvRefreshLoading(true)
     setIvRefreshErr(null)
+    setIvRefreshTaskProgress(null)
     setIvRefreshResult(null)
     try {
-      const res = await http.post<
-        ApiResponse<{
-          rows: number
-          start: string
-          end: string
-          out: string
-          mode?: string
-          incrementalRowsNew?: number
-        }>
-      >('/usgs/iv/refresh', { days: d, runChecksAfterRefresh: ivRunChecksAfter })
-      const data = res.data.data
+      const submitRes = await http.post<ApiResponse<AsyncTaskApiData>>(
+        '/tasks/iv-refresh',
+        {
+          days: d,
+          runChecksAfterRefresh: ivRunChecksAfter,
+        },
+        { headers: { 'Idempotency-Key': crypto.randomUUID() } }
+      )
+      const taskId = submitRes.data.data?.taskId
+      if (!taskId) {
+        setIvRefreshErr(translate(locale, 'errors.ivRefreshFailed'))
+        return
+      }
+      setIvRefreshRunningTaskId(taskId)
+      const finalTask = await waitTaskDone(taskId, 600_000, (t) =>
+        setIvRefreshTaskProgress(taskProgressLabel(t, locale))
+      )
+      setIvRefreshTaskProgress(null)
+      if (finalTask.status === 'CANCELLED') {
+        setIvRefreshErr(locale === 'zh' ? '任务已取消' : 'Task cancelled')
+        return
+      }
+      if (finalTask.status === 'FAILED') {
+        const msg = finalTask.errorMessage?.trim()
+        setIvRefreshErr(msg && msg !== '' ? msg : translate(locale, 'errors.ivRefreshFailed'))
+        return
+      }
+      const data = (finalTask.result ?? null) as {
+        rows: number
+        start: string
+        end: string
+        out: string
+        mode?: string
+        incrementalRowsNew?: number
+      } | null
+      if (data == null) {
+        setIvRefreshErr(translate(locale, 'errors.ivRefreshFailed'))
+        return
+      }
       setIvRefreshResult({
         rows: data.rows,
         start: data.start,
@@ -865,8 +1230,25 @@ function App() {
       }
     } catch {
       setIvRefreshErr(translate(locale, 'errors.ivRefreshFailed'))
+      setIvRefreshTaskProgress(null)
     } finally {
       setIvRefreshLoading(false)
+      setIvRefreshRunningTaskId(null)
+    }
+  }
+
+  async function cancelRunningTask(taskId: string, kind: 'forecast' | 'iv') {
+    try {
+      await http.put<ApiResponse<AsyncTaskApiData>>(`/tasks/${encodeURIComponent(taskId)}/cancel`, {})
+      if (kind === 'forecast') {
+        setAutoForecastRunHint(locale === 'zh' ? '已请求取消任务…' : 'Cancellation requested...')
+      } else {
+        setIvRefreshErr(locale === 'zh' ? '已请求取消任务…' : 'Cancellation requested...')
+      }
+    } catch (e) {
+      const msg = apiErrorMessage(e, locale === 'zh' ? '取消任务失败' : 'Failed to cancel task')
+      if (kind === 'forecast') setForecastErr(msg)
+      else setIvRefreshErr(msg)
     }
   }
 
@@ -922,6 +1304,102 @@ function App() {
     } finally {
       setForecastLoading(false)
     }
+  }
+
+  /** Water-quality tier rules plus multivariate IF (features CSV; may write STATE_ALERT). */
+  async function submitTurbidityDetection() {
+    const site = forecastForm.siteNo.trim()
+    if (!site) {
+      setTurbidityStateErr(translate(locale, 'errors.siteNoRequired'))
+      setTurbidityMultivarErr(translate(locale, 'errors.siteNoRequired'))
+      return
+    }
+
+    setTurbidityDetectionActive(true)
+    setTurbidityMultivarLoading(true)
+    setTurbidityMultivarErr(null)
+    setTurbidityMultivarResult(null)
+    setTurbidityStateLoading(true)
+    setTurbidityStateErr(null)
+    setTurbidityStateCheck(null)
+    setTurbidityRiskLoading(true)
+    setTurbidityRiskErr(null)
+    setTurbidityRiskForecast(null)
+
+    const multivarBody: Record<string, string> = { site_no: site }
+    const multivarPromise =
+      site === TURBIDITY_STATE_SITE
+        ? http.post<ApiResponse<TurbidityMultivarIfResult>>(
+            '/usgs/anomaly/site-param-multivar/check',
+            multivarBody
+          )
+        : Promise.reject(new Error(turbidityStateSiteOnlyMessage(locale)))
+
+    const statePromise =
+      site === TURBIDITY_STATE_SITE
+        ? http.post<ApiResponse<TurbidityStateCheckDto>>(
+            `/usgs/turbidity-state/check?siteNo=${encodeURIComponent(site)}`
+          )
+        : Promise.reject(new Error(turbidityStateSiteOnlyMessage(locale)))
+
+    const riskPromise =
+      site === TURBIDITY_STATE_SITE
+        ? http.post<ApiResponse<TurbidityRiskForecast12hDto>>(
+            `/usgs/turbidity-risk/risk-explain?siteNo=${encodeURIComponent(site)}`
+          )
+        : Promise.reject(new Error(turbidityStateSiteOnlyMessage(locale)))
+
+    const [multivarSettled, stateSettled, riskSettled] = await Promise.allSettled([
+      multivarPromise,
+      statePromise,
+      riskPromise,
+    ])
+
+    let trendRefresh = false
+    if (multivarSettled.status === 'fulfilled') {
+      setTurbidityMultivarResult(multivarSettled.value.data.data ?? null)
+    } else {
+      const reason = multivarSettled.reason
+      setTurbidityMultivarErr(
+        reason instanceof Error && site !== TURBIDITY_STATE_SITE
+          ? reason.message
+          : apiErrorMessage(reason, translate(locale, 'errors.anomalyCheckFailed'))
+      )
+      setTurbidityMultivarResult(null)
+    }
+
+    if (stateSettled.status === 'fulfilled') {
+      setTurbidityStateCheck(stateSettled.value.data.data)
+      trendRefresh = true
+    } else {
+      const reason = stateSettled.reason
+      setTurbidityStateErr(
+        reason instanceof Error && site !== TURBIDITY_STATE_SITE
+          ? reason.message
+          : apiErrorMessage(reason, translate(locale, 'errors.turbidityStateFailed'))
+      )
+      setTurbidityStateCheck(null)
+    }
+
+    if (riskSettled.status === 'fulfilled') {
+      setTurbidityRiskForecast(riskSettled.value.data.data ?? null)
+    } else {
+      const reason = riskSettled.reason
+      setTurbidityRiskErr(
+        reason instanceof Error && site !== TURBIDITY_STATE_SITE
+          ? reason.message
+          : apiErrorMessage(reason, translate(locale, 'errors.turbidityRiskFailed'))
+      )
+      setTurbidityRiskForecast(null)
+    }
+
+    if (trendRefresh && trendScopeStation != null) {
+      void loadTrendForStation(trendScopeStation.stationId, trendScopeStation.label)
+    }
+
+    setTurbidityMultivarLoading(false)
+    setTurbidityStateLoading(false)
+    setTurbidityRiskLoading(false)
   }
 
   async function submitSiteParamAnomaly(parameterCd: '00060' | '63680') {
@@ -1037,8 +1515,8 @@ function App() {
         .map((s) => (s.externalId != null ? String(s.externalId).trim() : ''))
         .filter(Boolean)
     )
-    return PUGET_DEMO_SITES.filter((d) => !reg.has(d.externalId))
-  }, [stations])
+    return pugetDemoSites.filter((d) => !reg.has(d.externalId))
+  }, [stations, pugetDemoSites])
 
   /** Map center: mean of registered stations, else demo sites, else Puget Sound default. */
   const mapCenter: [number, number] = useMemo(() => {
@@ -1068,15 +1546,25 @@ function App() {
         <div className="header-brand-row">
           <div className="header-left-cluster">
             <div className="header-brand">
-              <div className="header-logo" aria-hidden>
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none">
+              <Link
+                to="/"
+                className="header-logo"
+                aria-label={t('common.logoHomeAria')}
+                title={t('common.logoHomeAria')}
+                onClick={() => {
+                  if (location.pathname === '/') {
+                    window.scrollTo({ top: 0, behavior: 'smooth' })
+                  }
+                }}
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden>
                   <path
                     d="M12 3s6 6.2 6 11.2a6 6 0 1 1-12 0C6 9.2 12 3 12 3z"
                     fill="currentColor"
                     opacity="0.95"
                   />
                 </svg>
-              </div>
+              </Link>
               <div className="header-brand-text">
                 <div className="header-brand-name">{t('app.brandName')}</div>
                 <div className="header-brand-sub">{t('app.subtitle')}</div>
@@ -1502,6 +1990,22 @@ function App() {
               {autoForecastRunHint}
             </p>
           )}
+          {autoForecastTaskProgress != null && autoForecastTaskProgress !== '' && (
+            <div className="auto-forecast-actions">
+              <p className="auto-forecast-run-hint forecast-muted" role="status">
+                {autoForecastTaskProgress}
+              </p>
+              {autoForecastRunLoading && autoForecastRunningTaskId != null && (
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => void cancelRunningTask(autoForecastRunningTaskId, 'forecast')}
+                >
+                  {t('common.cancel')}
+                </button>
+              )}
+            </div>
+          )}
           <p className="auto-forecast-desc forecast-muted">
             {t('forecast.autoA1')}
             <strong>{t('forecast.autoA2')}</strong>
@@ -1619,31 +2123,7 @@ function App() {
             )}
           </div>
         )}
-        <p className="forecast-hint">
-          {t('forecast.hintH01')}
-          <code>/api/forecast/series</code>
-          {t('forecast.hintH02')}
-          <strong>{t('forecast.hintH03')}</strong>
-          {t('forecast.hintH04')}
-          <strong>{t('forecast.hintH05')}</strong>
-          {t('forecast.hintH06')}
-          <strong>{t('forecast.hintH07')}</strong>
-          {t('forecast.hintH08')}
-          <code>ai_service/data/usgs_puget_iv.csv</code>
-          {t('forecast.hintH09')}
-          <strong>{t('forecast.hintH10')}</strong>
-          {t('forecast.hintH11')}
-          {t('forecast.hintH12')}
-          <code>/api/usgs/anomaly/site-param/check</code>
-          {t('forecast.hintH13')}
-          <strong>{t('forecast.hintH14')}</strong>
-          {t('forecast.hintH15')}
-          {t('forecast.hintH16')}
-          <strong>{t('forecast.hintH17')}</strong>
-          {t('forecast.hintH18')}
-          <code>/api/usgs/turbidity-threshold/scan</code>
-          {t('forecast.hintH19')}
-        </p>
+        <p className="forecast-hint">{t('forecast.hintShort')}</p>
         <h4 className="analytics-subhead">{t('analytics.opsTitle')}</h4>
         <div className="iv-refresh-row">
           <label className="iv-refresh-label" htmlFor="iv-refresh-days">
@@ -1719,7 +2199,34 @@ function App() {
             )}
           </div>
         )}
-        {ivRefreshErr && <div className="forecast-err">{ivRefreshErr}</div>}
+        {ivRefreshTaskProgress != null && (
+          <div className="auto-forecast-actions">
+            <div className="forecast-muted" role="status">{ivRefreshTaskProgress}</div>
+            {ivRefreshLoading && ivRefreshRunningTaskId != null && (
+              <button
+                type="button"
+                className="btn-secondary"
+                onClick={() => void cancelRunningTask(ivRefreshRunningTaskId, 'iv')}
+              >
+                {t('common.cancel')}
+              </button>
+            )}
+          </div>
+        )}
+        {ivRefreshErr && (
+          <div className="forecast-err">
+            {ivRefreshErr}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void refreshIvCsv()}
+              disabled={ivRefreshLoading}
+              style={{ marginLeft: 8 }}
+            >
+              {t('common.retry')}
+            </button>
+          </div>
+        )}
         {ivRefreshResult && (
           <div className="iv-refresh-result">
             <span>
@@ -1817,22 +2324,21 @@ function App() {
             {forecastLoading ? t('forecast.forecasting') : t('forecast.generateForecast')}
           </button>
         </div>
-        <div className="anomaly-from-iv-row anomaly-dual-row">
+        <div className="anomaly-from-iv-row">
           <button
             type="button"
             className={`anomaly-from-iv-btn${siteParamAnomalyActiveCd === '00060' && siteParamAnomalyResult ? ' anomaly-from-iv-btn--active' : ''}`}
             onClick={() => void submitSiteParamAnomaly('00060')}
-            disabled={!!siteParamAnomalyLoading || forecastLoading}
+            disabled={
+              !!siteParamAnomalyLoading ||
+              forecastLoading ||
+              turbidityStateLoading ||
+              turbidityMultivarLoading
+            }
           >
-            {siteParamAnomalyLoading === '00060' ? t('forecast.flowAnomalyRunning') : t('forecast.flowAnomalyBtn')}
-          </button>
-          <button
-            type="button"
-            className={`anomaly-from-iv-btn${siteParamAnomalyActiveCd === '63680' && siteParamAnomalyResult ? ' anomaly-from-iv-btn--active' : ''}`}
-            onClick={() => void submitSiteParamAnomaly('63680')}
-            disabled={!!siteParamAnomalyLoading || forecastLoading}
-          >
-            {siteParamAnomalyLoading === '63680' ? t('forecast.turbAnomalyRunning') : t('forecast.turbAnomalyBtn')}
+            {siteParamAnomalyLoading === '00060'
+              ? t('forecast.flowAnomalyRunning')
+              : t('forecast.flowAnomalyBtn')}
           </button>
           <span className="anomaly-from-iv-note">
             {t('forecast.anomalyNoteBefore')}
@@ -1842,76 +2348,296 @@ function App() {
             {t('forecast.anomalyNoteEnd')}
           </span>
         </div>
-        {forecastErr && <div className="forecast-err">{forecastErr}</div>}
-        {siteParamAnomalyErr && <div className="forecast-err">{siteParamAnomalyErr}</div>}
-        {siteParamAnomalyActiveCd != null && (
-          <div className="forecast-result anomaly-result anomaly-result--single">
-            {siteParamAnomalyLoading === siteParamAnomalyActiveCd && siteParamAnomalyResult == null ? (
-              <p className="anomaly-result-loading">
-                {siteParamAnomalyActiveCd === '00060'
-                  ? t('forecast.anomalyLoadingFlow')
-                  : t('forecast.anomalyLoadingTurb')}
-              </p>
-            ) : siteParamAnomalyResult != null ? (
-              (() => {
-                const cd = siteParamAnomalyActiveCd
-                const r = siteParamAnomalyResult
-                return (
-                  <>
-                    <div className="forecast-kv">
-                      <span>
-                        {cd === '00060' ? t('forecast.anomalyBanner00060') : t('forecast.anomalyBanner63680')}
-                      </span>
-                      <strong>{r.anomaly_available ? t('forecast.yes') : t('forecast.no')}</strong>
-                    </div>
-                    {!r.anomaly_available ? (
-                      <div className="forecast-kv anomaly-impute-note">
-                        <span>{t('forecast.note')}</span>
-                        <span className="forecast-muted">{siteParamAnomalyReasonLabel(locale, r.reason)}</span>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.sampleTime')}</span>
-                          <span className="forecast-muted">{r.sample_timestamp ?? '—'}</span>
-                        </div>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.hoursUsed')}</span>
-                          <strong>{r.samples_used ?? '—'}</strong>
-                        </div>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.isAnomaly')}</span>
-                          <strong>{r.is_anomaly ? t('forecast.yes') : t('forecast.no')}</strong>
-                        </div>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.scoreThreshold')}</span>
-                          <strong>
-                            {r.anomaly_score ?? '—'} / {r.threshold ?? '—'}
-                          </strong>
-                        </div>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.model')}</span>
-                          <code>{r.model_version ?? '—'}</code>
-                        </div>
-                        <div className="forecast-kv">
-                          <span>{t('forecast.alert')}</span>
-                          <strong>
-                            {r.alert_created
-                              ? t('forecast.alertWritten')
-                              : translate(locale, 'forecast.alertNotWrittenTpl').replace(
-                                  '{{reason}}',
-                                  siteParamAnomalyReasonLabel(locale, r.alert_reason)
-                                )}
-                          </strong>
-                        </div>
-                      </>
-                    )}
-                  </>
-                )
-              })()
-            ) : null}
+        <div className="anomaly-from-iv-row anomaly-turbidity-row">
+          <button
+            type="button"
+            className={`anomaly-from-iv-btn${
+              turbidityDetectionActive && (turbidityStateCheck || turbidityMultivarResult)
+                ? ' anomaly-from-iv-btn--active'
+                : ''
+            }`}
+            onClick={() => void submitTurbidityDetection()}
+            disabled={
+              !!siteParamAnomalyLoading ||
+              forecastLoading ||
+              turbidityStateLoading ||
+              turbidityMultivarLoading
+            }
+          >
+            {turbidityStateLoading || turbidityMultivarLoading
+              ? t('forecast.turbDetectionRunning')
+              : t('forecast.turbDetectionBtn')}
+          </button>
+          <span className="anomaly-from-iv-note">{t('forecast.turbDetectionNote')}</span>
+        </div>
+        {forecastErr && (
+          <div className="forecast-err">
+            {forecastErr}
+            <button
+              type="button"
+              className="btn-secondary"
+              onClick={() => void runAutoForecastBatchNow()}
+              disabled={autoForecastRunLoading}
+              style={{ marginLeft: 8 }}
+            >
+              {t('common.retry')}
+            </button>
           </div>
         )}
+        {siteParamAnomalyActiveCd === '00060' && siteParamAnomalyErr && (
+          <div className="forecast-err">{siteParamAnomalyErr}</div>
+        )}
+        {siteParamAnomalyActiveCd === '00060' &&
+          (siteParamAnomalyLoading === '00060' || siteParamAnomalyResult != null) && (
+            <div className="forecast-result anomaly-result anomaly-result--single">
+              {siteParamAnomalyLoading === '00060' && siteParamAnomalyResult == null ? (
+                <p className="anomaly-result-loading">{t('forecast.anomalyLoadingFlow')}</p>
+              ) : siteParamAnomalyResult != null ? (
+                (() => {
+                  const r = siteParamAnomalyResult
+                  return (
+                    <>
+                      <div className="forecast-kv">
+                        <span>{t('forecast.anomalyBanner00060')}</span>
+                        <strong>{r.anomaly_available ? t('forecast.yes') : t('forecast.no')}</strong>
+                      </div>
+                      {!r.anomaly_available ? (
+                        <div className="forecast-kv anomaly-impute-note">
+                          <span>{t('forecast.note')}</span>
+                          <span className="forecast-muted">
+                            {siteParamAnomalyReasonLabel(locale, r.reason)}
+                          </span>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.sampleTime')}</span>
+                            <span className="forecast-muted">{r.sample_timestamp ?? '—'}</span>
+                          </div>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.hoursUsed')}</span>
+                            <strong>{r.samples_used ?? '—'}</strong>
+                          </div>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.isAnomaly')}</span>
+                            <strong>{r.is_anomaly ? t('forecast.yes') : t('forecast.no')}</strong>
+                          </div>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.scoreThreshold')}</span>
+                            <strong>
+                              {r.anomaly_score ?? '—'} / {r.threshold ?? '—'}
+                            </strong>
+                          </div>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.model')}</span>
+                            <code>{r.model_version ?? '—'}</code>
+                          </div>
+                          <div className="forecast-kv">
+                            <span>{t('forecast.alert')}</span>
+                            <strong>
+                              {r.alert_created
+                                ? t('forecast.alertWritten')
+                                : translate(locale, 'forecast.alertNotWrittenTpl').replace(
+                                    '{{reason}}',
+                                    siteParamAnomalyReasonLabel(locale, r.alert_reason)
+                                  )}
+                            </strong>
+                          </div>
+                        </>
+                      )}
+                    </>
+                  )
+                })()
+              ) : null}
+            </div>
+          )}
+        {turbidityDetectionActive &&
+          (turbidityStateLoading ||
+            turbidityMultivarLoading ||
+            turbidityRiskLoading ||
+            turbidityStateCheck != null ||
+            turbidityMultivarResult != null ||
+            turbidityRiskForecast != null ||
+            turbidityStateErr != null ||
+            turbidityMultivarErr != null ||
+            turbidityRiskErr != null) && (
+            <div className="forecast-result anomaly-result turbidity-detection-result">
+              {turbidityMultivarErr && <div className="forecast-err">{turbidityMultivarErr}</div>}
+              {turbidityStateErr && <div className="forecast-err">{turbidityStateErr}</div>}
+              {turbidityRiskErr && <div className="forecast-err">{turbidityRiskErr}</div>}
+              {(turbidityStateLoading || turbidityStateCheck?.snapshot) &&
+                (() => {
+                  const loadingOnly = turbidityStateLoading && !turbidityStateCheck?.snapshot
+                  const snap = turbidityStateCheck?.snapshot
+                    ? normalizeTurbidityStateSnapshot(turbidityStateCheck.snapshot)
+                    : null
+                  const headerSite = snap?.siteNo || forecastForm.siteNo.trim() || TURBIDITY_STATE_SITE
+                  const headerTime = snap?.referenceUtc ?? '—'
+                  const headerNtu = formatTurbidityNtu(snap?.ntu)
+                  const tier = snap?.alertTier ?? '—'
+                  const mv = turbidityMultivarResult
+                  const mvAvailable = Boolean(mv?.anomaly_available ?? mv?.anomalyAvailable)
+                  const mvIsAnomaly = mv?.is_anomaly ?? mv?.isAnomaly ?? null
+                  const freshnessIsGap = isGapTier(tier)
+                  const fusionText =
+                    snap != null
+                      ? turbidityFusionMessage(locale, tier, {
+                          available: mvAvailable,
+                          isAnomaly: mvIsAnomaly,
+                        })
+                      : ''
+                  return (
+                    <>
+                      <header className="turbidity-detection-header">
+                        <div className="forecast-kv">
+                          <span>{t('forecast.turbResultHeaderSite')}</span>
+                          <strong>{headerSite}</strong>
+                        </div>
+                        <div className="forecast-kv">
+                          <span>{t('forecast.turbDataTime')}</span>
+                          <span className="forecast-muted">{headerTime}</span>
+                        </div>
+                      </header>
+                      {loadingOnly ? (
+                        <p className="anomaly-result-loading">{t('forecast.turbDetectionRunning')}</p>
+                      ) : snap != null ? (
+                        <>
+                          <section
+                            className={`turbidity-detection-block turbidity-detection-block--primary ${tierSeverityClass(tier)}`}
+                          >
+                            <p className="turbidity-detection-block-title">
+                              {t('forecast.turbCurrentTitle')}
+                            </p>
+                            <div className="forecast-kv">
+                              <span>{t('forecast.turbidityNtu')}</span>
+                              <strong>{headerNtu}</strong>
+                            </div>
+                            <div className="forecast-kv">
+                              <span>{t('forecast.turbTierBlockTitle')}</span>
+                              <strong className="turbidity-tier-pill">
+                                {turbidityStateLabel(locale, tier)}
+                              </strong>
+                            </div>
+                          </section>
+                          <section className="turbidity-detection-block turbidity-detection-block--secondary">
+                            <p className="turbidity-detection-block-title">
+                              {t('forecast.turbMultivarBlockTitle')}
+                              <span className="turbidity-detection-block-hint">
+                                {t('forecast.turbMultivarBlockHint')}
+                              </span>
+                            </p>
+                            {turbidityMultivarLoading && turbidityMultivarResult == null ? (
+                              <p className="anomaly-result-loading">{t('forecast.turbMultivarLoading')}</p>
+                            ) : turbidityMultivarResult != null ? (
+                              <>
+                                {!mvAvailable ? (
+                                  <>
+                                    <strong className="turbidity-status-pill turbidity-status-pill--muted">
+                                      {t('forecast.turbMultivarUnavailable')}
+                                    </strong>
+                                    <p className="turbidity-risk-rationale">
+                                      {multivarReasonLabel(locale, turbidityMultivarResult.reason ?? undefined)}
+                                    </p>
+                                  </>
+                                ) : (
+                                  <strong
+                                    className={`turbidity-status-pill ${
+                                      mvIsAnomaly
+                                        ? 'turbidity-status-pill--alert'
+                                        : 'turbidity-status-pill--ok'
+                                    }`}
+                                  >
+                                    {mvIsAnomaly
+                                      ? t('forecast.turbMultivarPatternAnomaly')
+                                      : t('forecast.turbMultivarPatternNormal')}
+                                  </strong>
+                                )}
+                              </>
+                            ) : null}
+                          </section>
+                          <section className="turbidity-detection-block turbidity-detection-block--fusion">
+                            <p className="turbidity-detection-block-title">{t('forecast.turbFusionTitle')}</p>
+                            <p className="turbidity-fusion-text">{fusionText}</p>
+                          </section>
+                          <section className="turbidity-detection-block turbidity-detection-block--freshness">
+                            <div className="forecast-kv">
+                              <span>{t('forecast.turbFreshness')}</span>
+                              <strong
+                                className={`turbidity-status-pill ${
+                                  freshnessIsGap
+                                    ? 'turbidity-status-pill--alert'
+                                    : 'turbidity-status-pill--ok'
+                                }`}
+                              >
+                                {freshnessIsGap
+                                  ? turbidityStateLabel(locale, tier)
+                                  : t('forecast.turbFreshnessOk')}
+                              </strong>
+                            </div>
+                          </section>
+                        </>
+                      ) : null}
+                    </>
+                  )
+                })()}
+              {(turbidityRiskLoading || turbidityRiskForecast) &&
+                (() => {
+                  if (turbidityRiskLoading && !turbidityRiskForecast) {
+                    return (
+                      <section className="turbidity-detection-block turbidity-detection-block--risk">
+                        <p className="anomaly-result-loading">{t('forecast.turbidityRisk.loading')}</p>
+                      </section>
+                    )
+                  }
+                  if (!turbidityRiskForecast) return null
+                  const risk = normalizeTurbidityRiskForecast(turbidityRiskForecast)
+                  const rationale = risk.rationaleKey ? t(risk.rationaleKey) : '—'
+                  const riskLevel = turbidityRiskLevelLabel(locale, risk.alert12h, risk.recommendAlert)
+                  return (
+                    <section
+                      className={`turbidity-detection-block turbidity-detection-block--risk ${tierSeverityClass(risk.maxTier)}`}
+                    >
+                      <p className="turbidity-detection-block-title">{t('forecast.turbidityRisk.blockTitle')}</p>
+                      <div className="forecast-kv">
+                        <span>{t('forecast.turbidityRisk.alert12h')}</span>
+                        <strong>{riskLevel}</strong>
+                      </div>
+                      <div className="forecast-kv">
+                        <span>{t('forecast.turbidityRisk.maxTier')}</span>
+                        <strong>{turbidityStateLabel(locale, risk.maxTier)}</strong>
+                      </div>
+                      <div className="forecast-kv">
+                        <span>{t('forecast.turbidityRisk.recommendAlert')}</span>
+                        <strong>
+                          {risk.recommendAlert
+                            ? t('forecast.turbidityRisk.recommendYes')
+                            : t('forecast.turbidityRisk.recommendNo')}
+                        </strong>
+                      </div>
+                      <p className="turbidity-risk-rationale">{rationale}</p>
+                      <div className="turbidity-risk-ai-summary">
+                        <p className="turbidity-risk-ai-summary-title">
+                          {t('forecast.turbidityRisk.aiSummaryTitle')}
+                        </p>
+                        {turbidityRiskLoading && !risk.explanationText && (
+                          <p className="anomaly-result-loading">
+                            {t('forecast.turbidityRisk.aiSummaryLoading')}
+                          </p>
+                        )}
+                        {!turbidityRiskLoading && risk.explanationText && (
+                          <p className="turbidity-risk-explanation">{risk.explanationText}</p>
+                        )}
+                        {!turbidityRiskLoading && !risk.explanationText && risk.explanationError && (
+                          <p className="turbidity-risk-ai-summary-err">
+                            {risk.explanationError}
+                          </p>
+                        )}
+                      </div>
+                    </section>
+                  )
+                })()}
+            </div>
+          )}
         {forecastResult && (
           <div className="forecast-result">
             <div className="forecast-kv">
@@ -2155,7 +2881,7 @@ function App() {
                   <h4>{t('stations.rosterDb')}</h4>
                   <p className="station-roster-api-hint">
                     {t('stations.rosterApi')} <code>GET /api/map/stations</code>；<code>GET /api/stations</code> ·{' '}
-                    <a href="http://127.0.0.1:8080/swagger-ui.html" target="_blank" rel="noreferrer">
+                    <a href={`${devBackendOrigin}/swagger-ui.html`} target="_blank" rel="noreferrer">
                       {t('stations.swagger')}
                     </a>
                   </p>
@@ -2229,7 +2955,7 @@ function App() {
                         </tr>
                       </thead>
                       <tbody>
-                        {PUGET_DEMO_SITES.map((d) => (
+                        {pugetDemoSites.map((d) => (
                           <tr key={d.externalId}>
                             <td>
                               <code>{d.externalId}</code>
@@ -2246,6 +2972,8 @@ function App() {
           }
         />
       </Routes>
+
+      <CopilotWidget siteNo={forecastForm.siteNo.trim()} />
     </main>
   )
 }

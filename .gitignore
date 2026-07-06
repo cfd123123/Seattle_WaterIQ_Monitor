@@ -1,8 +1,17 @@
-# --- 本地文档（不推送到 GitHub）---
-/docs/
+# =============================================================================
+# Public-repo hygiene: keep source + minimal ops docs; exclude local data/artifacts.
+# See DEMO.md for local demo walkthrough and safe-push checklist.
+# =============================================================================
+
+# --- Local-only notes at repo root (keep docs/screenshots/ for optional demo captures) ---
+/docs/*
+!/docs/screenshots/
+!/docs/screenshots/**
+
+# --- Runtime / fetched data (never commit IV CSVs or feature tables) ---
 /ai_service/data/
 
-# --- 环境与密钥（切勿提交）---
+# --- Secrets and environment ---
 .env
 .env.*
 !.env.example
@@ -24,23 +33,24 @@ env/
 dist/
 build/
 
-# --- Java / Maven（根目录若执行 mvn 时）---
+# --- Java / Maven (when building from repo root) ---
 target/
 
-# --- Node / 前端构建产物（根目录视角）---
+# --- Node / frontend build output (repo-root perspective) ---
 node_modules/
 dist/
 dist-ssr/
 
-# --- IDE 与系统（仅忽略仓库根目录；子项目内见各自 .gitignore）---
+# --- IDE, editor, and OS junk (repo root only; subprojects may have their own) ---
 /.vscode/
 /.idea/
+.cursor/
 *.swp
 *.swo
 .DS_Store
 Thumbs.db
 
-# --- 日志与临时文件 ---
+# --- Logs and temp files ---
 *.log
 logs/
 tmp/
@@ -48,8 +58,38 @@ temp/
 *.tmp
 *.bak
 
-# --- 测试覆盖率 ---
+# --- Test coverage ---
 coverage/
 htmlcov/
 .coverage
 *.cover
+
+# --- Matplotlib font cache (generated locally) ---
+ai_service/.mplcache/
+ai_service/.mplconfig/
+
+# --- RAG index artifacts (rebuild locally: python -m assistant.rag.indexer --rebuild) ---
+ai_service/assistant/rag/store/
+
+# --- Backtest, EDA, tuning JSON, and other experiment outputs ---
+ai_service/reports/
+
+# --- Linearity eval plots and JSON (regenerate from scripts) ---
+ai_service/linearity_eval/output/
+ai_service/models/linearity_eval/output/
+
+# --- Trained model pickles (forecast fits on-the-fly; anomaly has imputation fallback) ---
+ai_service/models/*.pkl
+ai_service/*.pkl
+
+# --- Internal planning, summaries, implementation notes, interview prep (ai_service) ---
+ai_service/plan/
+ai_service/docs/rag_copilot_implementation.md
+ai_service/docs/assistant_agent_implementation.md
+ai_service/docs/assistant_agent.md
+ai_service/docs/ai_summary_turbidity.md
+ai_service/docs/flow_forecast_pipeline_interview.md
+# Keep committed: ai_service/docs/turbidity_operations.md (RAG source; see assistant/config.py)
+
+# --- monitor_business internal design docs (local only; see monitor_business/BUSINESS.md in repo) ---
+monitor_business/docs/

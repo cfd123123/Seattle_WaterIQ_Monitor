@@ -193,7 +193,7 @@ def test_unified_off_topic_canned(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "outside turbidity" in payload["answer"].lower()
 
 
-def test_unified_parse_failure_off_topic(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_unified_parse_failure_clarify(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASSISTANT_QUERY_TRANSFORM", "true")
 
     def mock_classify(_messages: list[dict[str, str]]) -> CompletionResult:
@@ -204,8 +204,9 @@ def test_unified_parse_failure_off_topic(monkeypatch: pytest.MonkeyPatch) -> Non
         classify_fn=mock_classify,
         complete_fn=lambda _m: CompletionResult(text="x", model="mock", provider="ollama"),
     )
-    assert payload["intent"] == "off_topic"
+    assert payload["intent"] == "clarify"
     assert payload["mode"] == "canned"
+    assert "rephrase" in payload["answer"].lower()
 
 
 def test_assistant_chat_hybrid_endpoint(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:

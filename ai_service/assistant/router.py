@@ -86,7 +86,7 @@ class AssistantChatResponse(BaseModel):
     provider: Literal["openai", "ollama", "none"]
     usage: dict[str, int | float] | None = None
     session_id: str | None = None
-    intent: Literal["ops_doc", "live_data", "hybrid", "chitchat", "off_topic"] | None = None
+    intent: Literal["ops_doc", "live_data", "hybrid", "chitchat", "off_topic", "clarify"] | None = None
     retrieval_query: str | None = None
 
 

@@ -68,6 +68,10 @@ class AssistantConfig:
     enabled: bool
     max_tool_rounds: int
     query_transform: bool
+    use_langgraph: bool
+    reflect_enabled: bool
+    reflect_use_llm: bool
+    reflect_max_retries: int
 
     @classmethod
     def from_environ(cls) -> AssistantConfig:
@@ -84,6 +88,14 @@ class AssistantConfig:
         else:
             max_tool_rounds = DEFAULT_MAX_TOOL_ROUNDS
         query_transform = _env_bool("ASSISTANT_QUERY_TRANSFORM", default=True)
+        use_langgraph = _env_bool("ASSISTANT_USE_LANGGRAPH", default=True)
+        reflect_enabled = _env_bool("ASSISTANT_REFLECT", default=True)
+        reflect_use_llm = _env_bool("ASSISTANT_REFLECT_USE_LLM", default=False)
+        reflect_retries_raw = os.environ.get("ASSISTANT_REFLECT_MAX_RETRIES")
+        if reflect_retries_raw and str(reflect_retries_raw).strip().isdigit():
+            reflect_max_retries = max(0, min(2, int(str(reflect_retries_raw).strip())))
+        else:
+            reflect_max_retries = 1
         return cls(
             master_enabled=master_enabled,
             api_key=api_key,
@@ -94,6 +106,10 @@ class AssistantConfig:
             enabled=enabled,
             max_tool_rounds=max_tool_rounds,
             query_transform=query_transform,
+            use_langgraph=use_langgraph,
+            reflect_enabled=reflect_enabled,
+            reflect_use_llm=reflect_use_llm,
+            reflect_max_retries=reflect_max_retries,
         )
 
 

@@ -197,6 +197,10 @@ def test_sanitize_usage_strips_ollama_nested_nulls() -> None:
         enabled=True,
         max_tool_rounds=5,
         query_transform=True,
+        use_langgraph=True,
+        reflect_enabled=True,
+        reflect_use_llm=False,
+        reflect_max_retries=1,
     )
     client = LLMClient(cfg)
 
@@ -291,7 +295,7 @@ def test_copilot_empty_hits_low_confidence(
 
     def _mock_classify(_messages: list[dict[str, str]]) -> CompletionResult:
         return CompletionResult(
-            text='{"intent": "ops_doc", "retrieval_query": "xyzzy_nonexistent_term_12345"}',
+            text='{"intent": "ops_doc", "retrieval_query": "xyzzyqqqzzz_nonexistent_chunk_token_999"}',
             model="mock-qwen",
             provider="ollama",
         )

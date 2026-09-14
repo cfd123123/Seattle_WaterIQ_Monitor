@@ -1,4 +1,8 @@
-"""Unified assistant entry — intent routing for POST /assistant/chat."""
+"""Unified assistant entry — intent routing for POST /assistant/chat.
+
+Default path: LangGraph state machine (ASSISTANT_USE_LANGGRAPH=true).
+Legacy if/else path remains for ASSISTANT_USE_LANGGRAPH=false.
+"""
 
 from __future__ import annotations
 
@@ -8,9 +12,11 @@ from assistant.config import AssistantConfig, load_assistant_config
 from assistant.copilot import answer_ops_doc_question
 from assistant.copilot_prompts import (
     CHITCHAT_ANSWER,
+    CLARIFY_ANSWER,
     OFF_TOPIC_ANSWER,
     build_hybrid_messages,
 )
+from assistant.graph import AssistantGraphDeps, invoke_assistant_graph
 from assistant.llm_client import CompletionResult, LLMClient, _merge_usage, sanitize_usage
 from assistant.orchestrator import (
     _sources_from_audit,
@@ -136,7 +142,7 @@ def _answer_hybrid(
         )
         selection_usage = selection.usage
 
-    rq = (retrieval_query or "recommend_alert Phase B alert policy").strip()
+    rq = (retrieval_query or "recommend_alert online turbidity alert policy").strip()
     ensure_rag_index()
     hits = search_ops_docs(rq, top_k=top_k)
     doc_sources = _dedupe_doc_sources(hits)
@@ -167,7 +173,7 @@ def _answer_hybrid(
     }
 
 
-def answer_unified_question(
+def _answer_unified_question_legacy(
     message: str,
     *,
     site_no: str | None = None,
@@ -180,12 +186,7 @@ def answer_unified_question(
     classify_fn: Callable[[list[dict[str, str]]], CompletionResult] | None = None,
     top_k: int | None = None,
 ) -> dict[str, Any]:
-    """
-    Unified POST /assistant/chat orchestration: classify intent then route.
-
-    Intents: chitchat, off_topic, ops_doc, live_data, hybrid.
-    When query_transform is disabled, falls back to live_data (tools loop only).
-    """
+    """Pre-LangGraph if/else router (kept for ASSISTANT_USE_LANGGRAPH=false)."""
     cfg = config if config is not None else load_assistant_config()
     resolved_session = session_store.resolve_session_id(session_id)
     merged_history = session_store.merge_history(resolved_session, history)
@@ -259,6 +260,17 @@ def answer_unified_question(
         _persist_session_turns(resolved_session, message, out, site_no=site_no)
         return out
 
+    if router.intent is Intent.CLARIFY:
+        out = _canned_unified(
+            answer=CLARIFY_ANSWER,
+            intent=Intent.CLARIFY,
+            retrieval_query=router.retrieval_query,
+            cfg=cfg,
+        )
+        out["session_id"] = resolved_session
+        _persist_session_turns(resolved_session, message, out, site_no=site_no)
+        return out
+
     if router.intent is Intent.OPS_DOC:
         payload = answer_ops_doc_question(
             message,
@@ -290,7 +302,6 @@ def answer_unified_question(
         _persist_session_turns(resolved_session, message, payload, site_no=site_no)
         return payload
 
-    # live_data (default agent tools loop)
     payload = answer_agent_question(
         message,
         site_no=site_no,
@@ -306,3 +317,94 @@ def answer_unified_question(
     payload["session_id"] = resolved_session
     _persist_session_turns(resolved_session, message, payload, site_no=site_no)
     return payload
+
+
+def _answer_unified_question_graph(
+    message: str,
+    *,
+    site_no: str | None = None,
+    session_id: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    max_tool_rounds: int | None = None,
+    config: AssistantConfig | None = None,
+    complete_fn: CompleteFn | None = None,
+    complete_with_tools_fn: Callable[..., CompletionResult] | None = None,
+    classify_fn: Callable[[list[dict[str, str]]], CompletionResult] | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """LangGraph-backed unified router (default)."""
+    cfg = config if config is not None else load_assistant_config()
+
+    if complete_fn is None:
+
+        def _complete_fn(msgs: list[dict[str, Any]]) -> CompletionResult:
+            client = LLMClient(cfg)
+            return client.complete(msgs, max_tokens=768)
+
+        complete_fn = _complete_fn
+
+    # Bind module-level names at call time so unittest patches still apply.
+    deps = AssistantGraphDeps(
+        cfg=cfg,
+        complete_fn=complete_fn,
+        complete_with_tools_fn=complete_with_tools_fn,
+        classify_fn=classify_fn,
+        classify_and_rewrite=classify_and_rewrite,
+        answer_agent_question=answer_agent_question,
+        answer_ops_doc_question=answer_ops_doc_question,
+        select_and_execute_tool=select_and_execute_tool,
+        try_turbidity_sites_list_answer=try_turbidity_sites_list_answer,
+        ensure_rag_index=ensure_rag_index,
+        search_ops_docs=search_ops_docs,
+        session_store=session_store,
+        looks_like_follow_up=looks_like_follow_up,
+        build_hybrid_messages=build_hybrid_messages,
+        canned_chitchat=CHITCHAT_ANSWER,
+        canned_off_topic=OFF_TOPIC_ANSWER,
+        canned_clarify=CLARIFY_ANSWER,
+        max_tool_rounds=max_tool_rounds,
+        top_k=top_k,
+    )
+    return invoke_assistant_graph(
+        deps,
+        message=message,
+        site_no=site_no,
+        session_id=session_id,
+        history=history,
+    )
+
+
+def answer_unified_question(
+    message: str,
+    *,
+    site_no: str | None = None,
+    session_id: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    max_tool_rounds: int | None = None,
+    config: AssistantConfig | None = None,
+    complete_fn: CompleteFn | None = None,
+    complete_with_tools_fn: Callable[..., CompletionResult] | None = None,
+    classify_fn: Callable[[list[dict[str, str]]], CompletionResult] | None = None,
+    top_k: int | None = None,
+) -> dict[str, Any]:
+    """
+    Unified POST /assistant/chat orchestration: classify intent then route.
+
+    Intents: chitchat, off_topic, ops_doc, live_data, hybrid.
+    When query_transform is disabled, falls back to live_data (tools loop only).
+    Default implementation uses LangGraph; set ASSISTANT_USE_LANGGRAPH=false for legacy.
+    """
+    cfg = config if config is not None else load_assistant_config()
+    runner = _answer_unified_question_graph if cfg.use_langgraph else _answer_unified_question_legacy
+    return runner(
+        message,
+        site_no=site_no,
+        session_id=session_id,
+        history=history,
+        max_tool_rounds=max_tool_rounds,
+        config=cfg,
+        complete_fn=complete_fn,
+        complete_with_tools_fn=complete_with_tools_fn,
+        classify_fn=classify_fn,
+        top_k=top_k,
+    )

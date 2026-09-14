@@ -22,7 +22,8 @@ tools:
   - name: get_forecast_series
     description: >
       Fetch IV-based short-horizon forecast series for discharge (00060) or turbidity (63680).
-      Returns history and forecast points for charting; read-only.
+      Returns BOTH history_points (past window) and forecast_points (future hours). Prefer this
+      single tool when the operator asks for forecast AND recent history together.
     parameters:
       type: object
       properties:
@@ -42,6 +43,30 @@ tools:
         - site_no
         - parameter_cd
         - horizon_hours
+
+  - name: get_iv_history
+    description: >
+      Read-only USGS IV history window for discharge (00060) or turbidity (63680) without forecasting.
+      Use when the operator asks only for past readings/trend, or as a second tool alongside a
+      forecast when more detailed history summary is needed.
+    parameters:
+      type: object
+      properties:
+        site_no:
+          type: string
+          description: USGS 8-digit site number.
+        parameter_cd:
+          type: string
+          description: NWIS parameter code — only 00060 or 63680.
+        history_days:
+          type: integer
+          description: History window in days (1–90, default 7).
+        max_points:
+          type: integer
+          description: Max points returned in history_points tail (1–168, default 48).
+      required:
+        - site_no
+        - parameter_cd
 
   - name: get_assistant_health
     description: Report assistant module status, LLM configuration, and RAG index readiness.

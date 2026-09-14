@@ -130,16 +130,87 @@ def _preview_result(result: dict[str, Any]) -> dict[str, Any]:
         "forecast_available",
         "parameter_cd",
         "horizon_hours",
+        "history_days",
+        "point_count",
+        "observed_count",
+        "latest_value",
+        "mean_value",
+        "returned_points",
         "status",
         "enabled",
         "region_label",
         "hit_count",
     )
-    return {k: data[k] for k in preview_keys if k in data}
+    preview = {k: data[k] for k in preview_keys if k in data}
+    # Compact series previews (avoid dumping full IV tails into session cache).
+    for series_key in ("history_points", "forecast_points"):
+        points = data.get(series_key)
+        if isinstance(points, list) and points:
+            preview[series_key] = {
+                "count": len(points),
+                "first": points[0],
+                "last": points[-1],
+            }
+    return preview
 
 
 def _tool_trace(audit: list[ToolAuditEntry]) -> list[str]:
     return [str(e["name"]) for e in audit if e.get("name")]
+
+
+def _selections_from_router_payload(
+    payload: dict[str, Any] | None,
+    *,
+    site_no: str | None,
+    max_tools: int = 3,
+) -> list[tuple[str, dict[str, Any]]]:
+    """Parse agent-lite JSON into ordered (tool_name, args) pairs (multi-tool aware)."""
+    if not payload:
+        return []
+
+    selections: list[tuple[str, dict[str, Any]]] = []
+    raw_tools = payload.get("tools")
+    if isinstance(raw_tools, list):
+        for item in raw_tools:
+            if not isinstance(item, dict):
+                continue
+            raw_name = item.get("tool") or item.get("name")
+            if raw_name is None or str(raw_name).lower() == "null":
+                continue
+            name = str(raw_name).strip()
+            if not name:
+                continue
+            raw_args = item.get("arguments") or item.get("args") or {}
+            args = dict(raw_args) if isinstance(raw_args, dict) else {}
+            if site_no and "site_no" not in args:
+                args["site_no"] = site_no
+            selections.append((name, args))
+            if len(selections) >= max_tools:
+                break
+        return selections
+
+    raw_tool = payload.get("tool")
+    if raw_tool is None or str(raw_tool).lower() == "null":
+        return []
+    name = str(raw_tool).strip()
+    if not name:
+        return []
+    raw_args = payload.get("arguments")
+    args = dict(raw_args) if isinstance(raw_args, dict) else {}
+    if site_no and "site_no" not in args:
+        args["site_no"] = site_no
+    return [(name, args)]
+
+
+def _run_tool_selections(
+    selections: list[tuple[str, dict[str, Any]]],
+    *,
+    audit: list[ToolAuditEntry],
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
+    for idx, (name, args) in enumerate(selections, start=1):
+        payloads.append(_run_tool_call(name, args, round_no=idx, audit=audit))
+    return payloads
 
 
 def _run_tools_loop(
@@ -219,30 +290,19 @@ def _run_agent_lite(
     usage_acc = selection.usage
 
     payload = _parse_json_object(selection.text)
-    tool_name = None
-    tool_args: dict[str, Any] = {}
-    if payload:
-        raw_tool = payload.get("tool")
-        if raw_tool and str(raw_tool).lower() != "null":
-            tool_name = str(raw_tool).strip()
-        raw_args = payload.get("arguments")
-        if isinstance(raw_args, dict):
-            tool_args = raw_args
-
-    if site_no and tool_name and "site_no" not in tool_args:
-        tool_args["site_no"] = site_no
-
-    tool_payload: dict[str, Any] | None = None
-    if tool_name:
-        tool_payload = _run_tool_call(tool_name, tool_args, round_no=1, audit=audit)
+    selections = _selections_from_router_payload(payload, site_no=site_no)
+    tool_payloads = _run_tool_selections(selections, audit=audit)
 
     summarize_user_parts = [
         f"User question: {message.strip()}",
     ]
     if site_no:
         summarize_user_parts.append(f"Context site_no: {site_no}")
-    if tool_payload is not None:
-        summarize_user_parts.append(f"Tool result JSON:\n{json.dumps(tool_payload, default=str)}")
+    if tool_payloads:
+        summarize_user_parts.append(
+            f"Tool result JSON ({len(tool_payloads)} tool(s)):\n"
+            f"{json.dumps(tool_payloads, default=str)}"
+        )
     else:
         summarize_user_parts.append("No tool was executed.")
 
@@ -265,6 +325,8 @@ def select_and_execute_tool(
     One-round tool pick + execute (agent-lite selection without summarize).
 
     Used by hybrid unified routing before RAG + synthesis.
+    If the router returns multiple tools, execute all and return the first payload
+    as the primary hybrid context (others remain in the audit trail).
     """
     audit: list[ToolAuditEntry] = []
     select_messages: list[dict[str, str]] = [
@@ -274,23 +336,9 @@ def select_and_execute_tool(
     selection = complete_fn(select_messages)
 
     payload = _parse_json_object(selection.text)
-    tool_name = None
-    tool_args: dict[str, Any] = {}
-    if payload:
-        raw_tool = payload.get("tool")
-        if raw_tool and str(raw_tool).lower() != "null":
-            tool_name = str(raw_tool).strip()
-        raw_args = payload.get("arguments")
-        if isinstance(raw_args, dict):
-            tool_args = raw_args
-
-    if site_no and tool_name and "site_no" not in tool_args:
-        tool_args["site_no"] = site_no
-
-    tool_payload: dict[str, Any] | None = None
-    if tool_name:
-        tool_payload = _run_tool_call(tool_name, tool_args, round_no=1, audit=audit)
-
+    selections = _selections_from_router_payload(payload, site_no=site_no)
+    tool_payloads = _run_tool_selections(selections, audit=audit)
+    tool_payload = tool_payloads[0] if tool_payloads else None
     return audit, tool_payload, selection
 
 

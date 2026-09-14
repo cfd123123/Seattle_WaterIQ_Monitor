@@ -1,0 +1,31 @@
+[
+  {"question": "你好", "expected_intent": "chitchat", "via": "fast_path"},
+  {"question": "hello", "expected_intent": "chitchat", "via": "fast_path"},
+  {"question": "thanks", "expected_intent": "chitchat", "via": "fast_path"},
+  {"question": "Who won the World Cup?", "expected_intent": "off_topic", "via": "fast_path"},
+  {"question": "tell me a joke", "expected_intent": "off_topic", "via": "fast_path"},
+  {"question": "create new site", "expected_intent": "off_topic", "via": "fast_path"},
+  {"question": "新建站点", "expected_intent": "off_topic", "via": "fast_path"},
+  {"question": "Phase B 是什么", "expected_intent": "ops_doc", "via": "fast_path"},
+  {"question": "What is Phase B?", "expected_intent": "ops_doc", "via": "fast_path"},
+  {"question": "What does R7a mean?", "expected_intent": "ops_doc", "via": "fast_path"},
+  {"question": "What is the 12h risk for site 12117500?", "expected_intent": "live_data", "via": "fast_path"},
+  {"question": "Is recommend_alert true for 12117500 right now?", "expected_intent": "live_data", "via": "fast_path"},
+  {"question": "Show current turbidity reading for 12117500", "expected_intent": "live_data", "via": "fast_path"},
+  {
+    "question": "Why is recommend_alert true for site 12117500 per Phase B policy?",
+    "expected_intent": "hybrid",
+    "via": "fast_path"
+  },
+  {
+    "question": "Explain why recommend_alert is true according to Phase B for 12117500",
+    "expected_intent": "hybrid",
+    "via": "fast_path"
+  },
+  {
+    "question": "why turbidity alert",
+    "expected_intent": "clarify",
+    "via": "llm_or_non_hybrid",
+    "note": "Weak cues only — must NOT force hybrid; ambiguous → LLM or non-hybrid path"
+  }
+]

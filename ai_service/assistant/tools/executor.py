@@ -65,6 +65,8 @@ def execute_tool(name: str, arguments: dict[str, Any] | None = None) -> dict[str
             return _get_turbidity_risk_forecast_12h(args)
         if name == "get_forecast_series":
             return _get_forecast_series(args)
+        if name == "get_iv_history":
+            return _get_iv_history(args)
         if name == "get_assistant_health":
             return _get_assistant_health()
         if name == "get_turbidity_state_snapshot":
@@ -130,6 +132,88 @@ def _get_forecast_series(args: dict[str, Any]) -> dict[str, Any]:
         history_days=history_days,
     )
     return _ok(data, source="python:/forecast/series")
+
+
+def _get_iv_history(args: dict[str, Any]) -> dict[str, Any]:
+    """Return a bounded IV history window (no forecast) for multi-step live_data asks."""
+    import math
+
+    import pandas as pd
+
+    from models.forecast_engine import load_hourly_series
+
+    site_no = validate_site_no(args.get("site_no", ""))
+    parameter_cd = str(args.get("parameter_cd", "")).strip()
+    if parameter_cd not in _ALLOWED_FORECAST_PARAMS:
+        raise ValueError(f"parameter_cd must be 00060 or 63680, got: {parameter_cd!r}")
+
+    history_days = int(args.get("history_days", 7))
+    if history_days < 1 or history_days > 90:
+        raise ValueError("history_days must be between 1 and 90")
+
+    max_points = int(args.get("max_points", 48))
+    if max_points < 1 or max_points > 168:
+        raise ValueError("max_points must be between 1 and 168")
+
+    csv_path = Path(args.get("iv_csv_path")) if args.get("iv_csv_path") else _DEFAULT_IV_CSV
+    if not csv_path.is_file():
+        raise FileNotFoundError(f"IV CSV not found: {csv_path}")
+
+    series = load_hourly_series(csv_path, site_no, parameter_cd, dense=False)
+    if series.empty:
+        return _ok(
+            {
+                "site_no": site_no,
+                "parameter_cd": parameter_cd,
+                "history_days": history_days,
+                "point_count": 0,
+                "observed_count": 0,
+                "history_points": [],
+                "latest_value": None,
+                "mean_value": None,
+                "message": "No IV rows found for this site/parameter in the local CSV.",
+            },
+            source="python:/iv/history",
+        )
+
+    ref = series.index.max()
+    window = series[series.index >= (ref - pd.Timedelta(days=history_days))]
+    observed = window.dropna()
+    mean_value = round(float(observed.mean()), 4) if not observed.empty else None
+    latest_value = None
+    latest_ts = None
+    if not observed.empty:
+        latest_ts = observed.index[-1].isoformat()
+        latest_value = round(float(observed.iloc[-1]), 4)
+
+    # Prefer observed points for the returned tail; fall back to calendar (incl. nulls) if empty.
+    source_series = observed if not observed.empty else window
+    tail = source_series.tail(max_points)
+    history_points = [
+        {
+            "timestamp": ts.isoformat(),
+            "value": (round(float(v), 4) if pd.notna(v) and not (isinstance(v, float) and math.isnan(v)) else None),
+        }
+        for ts, v in tail.items()
+    ]
+
+    return _ok(
+        {
+            "site_no": site_no,
+            "parameter_cd": parameter_cd,
+            "history_days": history_days,
+            "point_count": int(len(window)),
+            "observed_count": int(len(observed)),
+            "window_start": window.index.min().isoformat() if len(window) else None,
+            "window_end": window.index.max().isoformat() if len(window) else None,
+            "latest_timestamp": latest_ts,
+            "latest_value": latest_value,
+            "mean_value": mean_value,
+            "history_points": history_points,
+            "returned_points": len(history_points),
+        },
+        source="python:/iv/history",
+    )
 
 
 def _get_assistant_health() -> dict[str, Any]:

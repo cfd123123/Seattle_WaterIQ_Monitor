@@ -37,7 +37,8 @@ _EMBEDDED_TOOLS: list[dict[str, Any]] = [
         "name": "get_forecast_series",
         "description": (
             "Fetch IV-based short-horizon forecast series for discharge (00060) or turbidity (63680). "
-            "Returns history and forecast points; read-only."
+            "Returns BOTH history_points and forecast_points. Prefer this single tool when the "
+            "operator asks for forecast AND recent history together."
         ),
         "parameters": {
             "type": "object",
@@ -57,6 +58,32 @@ _EMBEDDED_TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["site_no", "parameter_cd", "horizon_hours"],
+        },
+    },
+    {
+        "name": "get_iv_history",
+        "description": (
+            "Read-only USGS IV history for discharge (00060) or turbidity (63680) without forecasting. "
+            "Use for past readings/trend, or paired with a forecast tool for detailed history."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "site_no": {"type": "string", "description": "USGS 8-digit site number."},
+                "parameter_cd": {
+                    "type": "string",
+                    "description": "NWIS parameter code — only 00060 or 63680.",
+                },
+                "history_days": {
+                    "type": "integer",
+                    "description": "History window in days (1–90, default 7).",
+                },
+                "max_points": {
+                    "type": "integer",
+                    "description": "Max points in history_points tail (1–168, default 48).",
+                },
+            },
+            "required": ["site_no", "parameter_cd"],
         },
     },
     {

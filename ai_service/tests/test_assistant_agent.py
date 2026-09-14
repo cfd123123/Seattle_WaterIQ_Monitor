@@ -107,8 +107,157 @@ def test_registry_includes_new_tools() -> None:
         "get_turbidity_state_snapshot",
         "list_puget_default_sites",
         "search_ops_docs",
+        "get_iv_history",
+        "get_forecast_series",
     ):
         assert expected in names
+
+
+def test_execute_iv_history_tool(tmp_path) -> None:
+    import pandas as pd
+
+    idx = pd.date_range("2024-01-01", periods=5, freq="h", tz="UTC")
+    series = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], index=idx)
+    csv_path = tmp_path / "iv.csv"
+    csv_path.write_text("datetime,site_no,63680\n", encoding="utf-8")
+
+    with patch("models.forecast_engine.load_hourly_series", return_value=series):
+        result = execute_tool(
+            "get_iv_history",
+            {
+                "site_no": "12117500",
+                "parameter_cd": "63680",
+                "history_days": 7,
+                "iv_csv_path": str(csv_path),
+            },
+        )
+
+    assert result["ok"] is True
+    assert result["source"] == "python:/iv/history"
+    assert result["data"]["parameter_cd"] == "63680"
+    assert result["data"]["observed_count"] == 5
+    assert result["data"]["latest_value"] == 5.0
+    assert len(result["data"]["history_points"]) == 5
+
+
+def test_agent_lite_multi_tool_forecast_and_history() -> None:
+    phases: list[str] = []
+
+    def mock_complete(messages: list[dict[str, Any]]) -> CompletionResult:
+        system = messages[0]["content"]
+        if "tool router" in system.lower():
+            phases.append("select")
+            return CompletionResult(
+                text=json.dumps(
+                    {
+                        "tools": [
+                            {
+                                "tool": "get_forecast_series",
+                                "arguments": {
+                                    "site_no": "12117500",
+                                    "parameter_cd": "63680",
+                                    "horizon_hours": 12,
+                                    "history_days": 7,
+                                },
+                            },
+                            {
+                                "tool": "get_iv_history",
+                                "arguments": {
+                                    "site_no": "12117500",
+                                    "parameter_cd": "63680",
+                                    "history_days": 7,
+                                },
+                            },
+                        ]
+                    }
+                ),
+                model="mock",
+                provider="ollama",
+            )
+        phases.append("summarize")
+        user = messages[-1]["content"]
+        assert "2 tool(s)" in user
+        return CompletionResult(
+            text=(
+                "For site 12117500 turbidity: forecast_available=true with 12h horizon; "
+                "history shows latest_value=5.0 NTU over the past week."
+            ),
+            model="mock",
+            provider="ollama",
+            usage={"prompt_tokens": 10, "completion_tokens": 20},
+        )
+
+    forecast_payload = {
+        "ok": True,
+        "data": {
+            "site_no": "12117500",
+            "parameter_cd": "63680",
+            "forecast_available": True,
+            "horizon_hours": 12,
+            "history_days": 7,
+            "history_points": [{"timestamp": "t0", "value": 1.0}],
+            "forecast_points": [{"timestamp": "t1", "value": 2.0}],
+        },
+        "source": "python:/forecast/series",
+    }
+    history_payload = {
+        "ok": True,
+        "data": {
+            "site_no": "12117500",
+            "parameter_cd": "63680",
+            "latest_value": 5.0,
+            "observed_count": 5,
+        },
+        "source": "python:/iv/history",
+    }
+
+    def fake_execute(name: str, arguments: dict[str, Any] | None = None) -> dict[str, Any]:
+        if name == "get_forecast_series":
+            return forecast_payload
+        if name == "get_iv_history":
+            return history_payload
+        return {"ok": False, "error_code": "UNEXPECTED", "message": name}
+
+    from assistant.llm_client import ToolsNotSupportedError
+
+    def refuse_tools(_messages: list[dict[str, Any]], _tools: list[dict[str, Any]]) -> CompletionResult:
+        raise ToolsNotSupportedError("tools not supported in test")
+
+    with patch("assistant.orchestrator.execute_tool", side_effect=fake_execute):
+        payload = answer_agent_question(
+            "Forecast turbidity for 12117500 and also return recent history.",
+            site_no="12117500",
+            complete_fn=mock_complete,
+            complete_with_tools_fn=refuse_tools,
+        )
+
+    assert payload["mode"] == "agent_lite"
+    assert phases == ["select", "summarize"]
+    assert payload["tool_trace"] == ["get_forecast_series", "get_iv_history"]
+    assert "12117500" in payload["answer"]
+    assert len(payload["tool_calls"]) == 2
+
+
+def test_selections_from_router_payload_legacy_and_multi() -> None:
+    from assistant.orchestrator import _selections_from_router_payload
+
+    legacy = _selections_from_router_payload(
+        {"tool": "get_iv_history", "arguments": {"parameter_cd": "63680"}},
+        site_no="12117500",
+    )
+    assert legacy == [("get_iv_history", {"parameter_cd": "63680", "site_no": "12117500"})]
+
+    multi = _selections_from_router_payload(
+        {
+            "tools": [
+                {"tool": "get_forecast_series", "arguments": {"parameter_cd": "63680", "horizon_hours": 12}},
+                {"name": "get_iv_history", "args": {"parameter_cd": "63680"}},
+            ]
+        },
+        site_no="12117500",
+    )
+    assert [name for name, _ in multi] == ["get_forecast_series", "get_iv_history"]
+    assert multi[0][1]["site_no"] == "12117500"
 
 
 def test_execute_risk_forecast_tool() -> None:

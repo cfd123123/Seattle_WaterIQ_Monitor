@@ -113,25 +113,85 @@ def test_fast_path_off_topic_does_not_reject_monitoring_weather() -> None:
     assert called is True
 
 
-def test_classify_chinese_phase_b_mock_llm() -> None:
-    def _mock_router(messages: list[dict[str, str]]) -> CompletionResult:
-        user = messages[-1]["content"]
-        assert "Phase B 是什么" in user
-        return CompletionResult(
-            text='{"intent": "ops_doc", "retrieval_query": "Phase B online alert recommend_alert"}',
-            model="mock-qwen",
-            provider="ollama",
-        )
+def test_classify_chinese_phase_b_fast_path() -> None:
+    called = False
 
-    result = classify_and_rewrite("Phase B 是什么", complete_fn=_mock_router)
+    def _should_not_run(_messages: list[dict[str, str]]) -> CompletionResult:
+        nonlocal called
+        called = True
+        return CompletionResult(text="{}", model="x", provider="ollama")
+
+    result = classify_and_rewrite("Phase B 是什么", complete_fn=_should_not_run)
     assert result.intent is Intent.OPS_DOC
     assert result.retrieval_query is not None
     assert "Phase B" in result.retrieval_query
+    assert called is False
 
 
-def test_parse_router_invalid_defaults_off_topic() -> None:
+def test_parse_router_invalid_defaults_clarify() -> None:
     result = parse_router_output("not valid json at all")
-    assert result.intent is Intent.OFF_TOPIC
+    assert result.intent is Intent.CLARIFY
+
+
+def test_parse_router_low_confidence_clarify() -> None:
+    result = parse_router_output(
+        '{"intent": "live_data", "retrieval_query": "", "confidence": 0.2}'
+    )
+    assert result.intent is Intent.CLARIFY
+    assert result.confidence == 0.2
+
+
+def test_parse_router_markdown_fence_json() -> None:
+    result = parse_router_output(
+        '```json\n{"intent": "ops_doc", "retrieval_query": "Phase B", "confidence": 0.9}\n```'
+    )
+    assert result.intent is Intent.OPS_DOC
+    assert "Phase B" in (result.retrieval_query or "")
+
+
+def test_fast_path_live_data_skips_llm() -> None:
+    called = False
+
+    def _should_not_run(_messages: list[dict[str, str]]) -> CompletionResult:
+        nonlocal called
+        called = True
+        return CompletionResult(text="{}", model="x", provider="ollama")
+
+    result = classify_and_rewrite(
+        "What is the 12h risk for site 12117500?",
+        complete_fn=_should_not_run,
+    )
+    assert result.intent is Intent.LIVE_DATA
+    assert called is False
+
+
+def test_weak_why_alert_is_not_forced_hybrid() -> None:
+    def _mock_router(_messages: list[dict[str, str]]) -> CompletionResult:
+        return CompletionResult(
+            text='{"intent": "clarify", "retrieval_query": "", "confidence": 0.3}',
+            model="mock",
+            provider="ollama",
+        )
+
+    result = classify_and_rewrite("why turbidity alert", complete_fn=_mock_router)
+    assert result.intent is Intent.CLARIFY
+
+
+def test_intent_eval_fixture_fast_paths() -> None:
+    import json
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "intent_eval.json"
+    cases = json.loads(fixture.read_text(encoding="utf-8"))
+
+    def _fail_if_called(_messages: list[dict[str, str]]) -> CompletionResult:
+        raise AssertionError("LLM should not be called for via=fast_path cases")
+
+    for case in cases:
+        if case.get("via") != "fast_path":
+            continue
+        result = classify_and_rewrite(case["question"], complete_fn=_fail_if_called)
+        assert result.intent.value == case["expected_intent"], case["question"]
 
 
 def test_classify_off_topic_mock_llm() -> None:
@@ -142,5 +202,12 @@ def test_classify_off_topic_mock_llm() -> None:
             provider="ollama",
         )
 
-    result = classify_and_rewrite("Who won the World Cup?", complete_fn=_mock_router)
+    # Fast path already handles World Cup; use a monitoring-scoped weather ask for LLM path.
+    result = classify_and_rewrite(
+        "How does weather affect turbidity readings?",
+        complete_fn=_mock_router,
+    )
+    # Monitoring-scoped weather goes to LLM; mock forces off_topic for this test of parser path.
+    # But wait - ops_doc keywords might not match; weather + turbidity is monitoring scoped so not off_topic fast path.
+    # Mock returns off_topic - but classify is called with that question and LLM - good.
     assert result.intent is Intent.OFF_TOPIC

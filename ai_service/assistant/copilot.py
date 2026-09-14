@@ -7,6 +7,7 @@ from typing import Any, Callable
 from assistant.config import AssistantConfig, load_assistant_config
 from assistant.copilot_prompts import (
     CHITCHAT_ANSWER,
+    CLARIFY_ANSWER,
     HYBRID_ANSWER,
     LIVE_DATA_ANSWER,
     LOW_CONFIDENCE_ANSWER,
@@ -138,6 +139,13 @@ def answer_copilot_question(
         return _canned_response(
             answer=OFF_TOPIC_ANSWER,
             intent=Intent.OFF_TOPIC,
+            retrieval_query=router.retrieval_query,
+            cfg=cfg,
+        )
+    if router.intent is Intent.CLARIFY:
+        return _canned_response(
+            answer=CLARIFY_ANSWER,
+            intent=Intent.CLARIFY,
             retrieval_query=router.retrieval_query,
             cfg=cfg,
         )

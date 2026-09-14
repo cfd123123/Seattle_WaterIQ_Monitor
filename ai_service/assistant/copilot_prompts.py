@@ -25,29 +25,35 @@ STEP 2 — If IN_SCOPE, classify intent as exactly one of:
 - live_data — current readings, forecasts, site status, alert state (data only)
 - hybrid — needs BOTH live tool data AND ops documentation (e.g. "why is recommend_alert true per Phase B?")
 - chitchat — greetings, thanks, brief small talk about using the assistant
+- clarify — question is ambiguous; you are not confident enough to choose ops_doc/live_data/hybrid
 
 When intent is ops_doc or hybrid, set retrieval_query to a short English keyword phrase for BM25 search \
 (use English even if the question is Chinese; keep product terms like Phase B, recommend_alert, R7a).
-For live_data, chitchat, and off_topic, use an empty retrieval_query string.
+For live_data, chitchat, off_topic, and clarify, use an empty retrieval_query string.
+
+Optional confidence (0.0–1.0): include only if you can estimate it. If below 0.5, prefer intent clarify.
 
 Reply with ONLY one JSON object, no markdown:
-{"intent": "<ops_doc|live_data|hybrid|chitchat|off_topic>", "retrieval_query": "<english keywords or empty string>"}
+{"intent": "<ops_doc|live_data|hybrid|chitchat|off_topic|clarify>", "retrieval_query": "<english keywords or empty string>", "confidence": <0.0-1.0 optional>}
 
 Examples:
 Question: 你好
-{"intent": "chitchat", "retrieval_query": ""}
+{"intent": "chitchat", "retrieval_query": "", "confidence": 1.0}
 
 Question: Who won the World Cup?
-{"intent": "off_topic", "retrieval_query": ""}
+{"intent": "off_topic", "retrieval_query": "", "confidence": 1.0}
 
 Question: Phase B 是什么
-{"intent": "ops_doc", "retrieval_query": "Phase B online alert recommend_alert"}
+{"intent": "ops_doc", "retrieval_query": "Phase B online alert recommend_alert", "confidence": 0.9}
 
 Question: What is turbidity at site 12117500 right now?
-{"intent": "live_data", "retrieval_query": ""}
+{"intent": "live_data", "retrieval_query": "", "confidence": 0.9}
 
 Question: Why is recommend_alert true for site 12117500 and what does Phase B say?
-{"intent": "hybrid", "retrieval_query": "recommend_alert Phase B alert policy"}
+{"intent": "hybrid", "retrieval_query": "recommend_alert Phase B alert policy", "confidence": 0.9}
+
+Question: help with that thing
+{"intent": "clarify", "retrieval_query": "", "confidence": 0.2}
 """
 
 COPILOT_SYSTEM_PROMPT = """\
@@ -87,6 +93,14 @@ CHITCHAT_ANSWER = (
 OFF_TOPIC_ANSWER = (
     "That question is outside turbidity monitoring and ops documentation. "
     "I can help with alerts, site readings, monitoring states, and runbook topics for this product."
+)
+
+CLARIFY_ANSWER = (
+    "I'm not sure what you need yet. Please rephrase using one clear ask: "
+    "(1) docs — e.g. What is the online turbidity alert policy?; "
+    "(2) live data — e.g. 12h turbidity risk for site 12117500; "
+    "(3) both — e.g. why is recommend_alert true for 12117500 according to the alert rules?. "
+    "I cannot change alerts, tiers, or create sites."
 )
 
 LIVE_DATA_ANSWER = (

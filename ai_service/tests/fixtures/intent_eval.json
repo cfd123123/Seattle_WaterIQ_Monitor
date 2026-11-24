@@ -1,31 +1,113 @@
 [
-  {"question": "你好", "expected_intent": "chitchat", "via": "fast_path"},
-  {"question": "hello", "expected_intent": "chitchat", "via": "fast_path"},
-  {"question": "thanks", "expected_intent": "chitchat", "via": "fast_path"},
-  {"question": "Who won the World Cup?", "expected_intent": "off_topic", "via": "fast_path"},
-  {"question": "tell me a joke", "expected_intent": "off_topic", "via": "fast_path"},
-  {"question": "create new site", "expected_intent": "off_topic", "via": "fast_path"},
-  {"question": "新建站点", "expected_intent": "off_topic", "via": "fast_path"},
-  {"question": "Phase B 是什么", "expected_intent": "ops_doc", "via": "fast_path"},
-  {"question": "What is Phase B?", "expected_intent": "ops_doc", "via": "fast_path"},
-  {"question": "What does R7a mean?", "expected_intent": "ops_doc", "via": "fast_path"},
-  {"question": "What is the 12h risk for site 12117500?", "expected_intent": "live_data", "via": "fast_path"},
-  {"question": "Is recommend_alert true for 12117500 right now?", "expected_intent": "live_data", "via": "fast_path"},
-  {"question": "Show current turbidity reading for 12117500", "expected_intent": "live_data", "via": "fast_path"},
+  {"id": "chit-zh-1", "question": "你好", "expected_intent": "chitchat", "via": "rule"},
+  {"id": "chit-en-1", "question": "hello", "expected_intent": "chitchat", "via": "rule"},
+  {"id": "chit-en-2", "question": "Thank you!", "expected_intent": "chitchat", "via": "rule"},
+  {"id": "chit-zh-2", "question": "谢谢", "expected_intent": "chitchat", "via": "rule"},
+  {"id": "chit-en-3", "question": "hi there, what can you help me with?", "expected_intent": "chitchat", "via": "llm"},
+
+  {"id": "off-en-1", "question": "Who won the World Cup?", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-en-2", "question": "tell me a joke", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-en-3", "question": "what is the stock price of Apple?", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-en-4", "question": "write me a poem about cats", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-en-5", "question": "what's the weather today?", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-zh-1", "question": "讲个笑话", "expected_intent": "off_topic", "via": "rule"},
+  {"id": "off-zh-2", "question": "比特币现在多少钱", "expected_intent": "off_topic", "via": "rule", "tags": ["off_topic_beats_live_cue"]},
+  {"id": "off-en-6", "question": "What is the capital of France?", "expected_intent": "off_topic", "via": "llm"},
+  {"id": "off-en-7", "question": "Explain how transformers work in deep learning", "expected_intent": "off_topic", "via": "llm"},
+  {"id": "off-zh-3", "question": "帮我写一段 Python 排序代码", "expected_intent": "off_topic", "via": "llm"},
+
+  {"id": "act-en-1", "question": "create new site", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-en-2", "question": "add a new site", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-zh-1", "question": "新建站点", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-en-3", "question": "Please close alert 42", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-en-4", "question": "Can you acknowledge the alert for 12117500?", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-en-5", "question": "Set recommend_alert to false for 12117500", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-zh-2", "question": "帮我删除站点 12147600", "expected_intent": "action_request", "via": "rule"},
+  {"id": "act-zh-3", "question": "把阈值调高一点", "expected_intent": "action_request", "via": "rule", "tags": ["object_before_verb"]},
+  {"id": "act-zh-4", "question": "阈值能不能调高点", "expected_intent": "action_request", "via": "llm", "tags": ["indirect_request"]},
+  {"id": "act-en-6", "question": "I'd like the warning threshold lowered to 40 NTU", "expected_intent": "action_request", "via": "llm", "tags": ["indirect_request"]},
+
+  {"id": "howto-en-1", "question": "How do I close an alert?", "expected_intent": "ops_doc", "via": "llm", "tags": ["how_to_not_action"]},
+  {"id": "howto-zh-1", "question": "怎么新建站点", "expected_intent": "ops_doc", "via": "llm", "tags": ["how_to_not_action"]},
+  {"id": "howto-en-2", "question": "What happens when I acknowledge an alert?", "expected_intent": "ops_doc", "via": "llm", "tags": ["how_to_not_action"]},
+
+  {"id": "doc-zh-1", "question": "Phase B 是什么", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-1", "question": "What is Phase B?", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-2", "question": "What does R7a mean?", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-3", "question": "Explain the alert tiers", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-4", "question": "What is recommend_alert?", "expected_intent": "ops_doc", "via": "rule", "tags": ["product_term_not_live"]},
+  {"id": "doc-zh-2", "question": "监测状态是什么意思", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-5", "question": "Why does Phase B use a persistence rule?", "expected_intent": "ops_doc", "via": "rule"},
+  {"id": "doc-en-6", "question": "In the meantime, what does R7b mean?", "expected_intent": "ops_doc", "via": "rule", "tags": ["word_boundary"]},
+  {"id": "doc-en-7", "question": "How does weather affect turbidity readings?", "expected_intent": "ops_doc", "via": "llm"},
+  {"id": "doc-en-8", "question": "What is turbidity?", "expected_intent": "ops_doc", "via": "llm"},
+  {"id": "doc-en-9", "question": "What does NTU stand for?", "expected_intent": "ops_doc", "via": "llm"},
+  {"id": "doc-zh-3", "question": "浊度告警是怎么判定的", "expected_intent": "ops_doc", "via": "llm"},
+
+  {"id": "live-en-1", "question": "What is the 12h risk for site 12117500?", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-2", "question": "Is recommend_alert true for 12117500 right now?", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-3", "question": "Show current turbidity reading for 12117500", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-zh-1", "question": "12117500 现在浊度多少", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-4", "question": "What is the current discharge at 12147600?", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-5", "question": "Get the 24h flow forecast for 12117500", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-6", "question": "Give me the latest turbidity data", "expected_intent": "live_data", "via": "rule"},
+  {"id": "live-en-7", "question": "Can you update me on site 12117500?", "expected_intent": "live_data", "via": "rule", "tags": ["update_me_not_action"]},
+  {"id": "live-zh-2", "question": "浊度会不会继续上涨？", "expected_intent": "live_data", "via": "llm"},
+  {"id": "live-zh-3", "question": "Cedar River 的流量趋势怎么样", "expected_intent": "live_data", "via": "llm"},
+  {"id": "live-en-8", "question": "How high will the Tolt River get tomorrow?", "expected_intent": "live_data", "via": "llm"},
+  {"id": "live-en-9", "question": "What was turbidity on 20260517?", "expected_intent": "live_data", "via": "llm", "tags": ["date_not_site"]},
+
+  {"id": "hyb-en-1", "question": "Why is recommend_alert true for site 12117500 per Phase B policy?", "expected_intent": "hybrid", "via": "rule"},
+  {"id": "hyb-en-2", "question": "Explain why recommend_alert is true according to Phase B for 12117500", "expected_intent": "hybrid", "via": "rule"},
+  {"id": "hyb-zh-1", "question": "为什么 12117500 现在告警？", "expected_intent": "hybrid", "via": "rule"},
+  {"id": "hyb-en-3", "question": "Why is turbidity high right now at 12147600?", "expected_intent": "hybrid", "via": "rule"},
+  {"id": "hyb-en-4", "question": "Is the current tier for Cedar River consistent with the Phase B rules?", "expected_intent": "hybrid", "via": "rule"},
+  {"id": "hyb-en-5", "question": "why turbidity alert", "expected_intent": "hybrid", "via": "llm", "tags": ["ambiguous_union"]},
+  {"id": "hyb-zh-2", "question": "Cedar River 这么浑正常吗？按规程该怎么办", "expected_intent": "hybrid", "via": "llm"},
+
+  {"id": "clar-en-1", "question": "help with that thing", "expected_intent": "clarify", "via": "llm"},
+  {"id": "clar-zh-1", "question": "嗯", "expected_intent": "clarify", "via": "llm"},
+
   {
-    "question": "Why is recommend_alert true for site 12117500 per Phase B policy?",
-    "expected_intent": "hybrid",
-    "via": "fast_path"
+    "id": "hist-1", "question": "why?", "expected_intent": "hybrid", "via": "llm", "tags": ["follow_up"],
+    "history": [
+      {"role": "user", "content": "What is the current turbidity at 12117500?"},
+      {"role": "assistant", "content": "Turbidity at 12117500 is 62 NTU and the alert tier is HIGH."}
+    ]
   },
   {
-    "question": "Explain why recommend_alert is true according to Phase B for 12117500",
-    "expected_intent": "hybrid",
-    "via": "fast_path"
+    "id": "hist-2", "question": "what about 12147600?", "expected_intent": "live_data", "via": "llm", "tags": ["follow_up"],
+    "history": [
+      {"role": "user", "content": "What is the current turbidity at 12117500?"},
+      {"role": "assistant", "content": "Turbidity at 12117500 is 62 NTU and the alert tier is HIGH."}
+    ]
   },
   {
-    "question": "why turbidity alert",
-    "expected_intent": "clarify",
-    "via": "llm_or_non_hybrid",
-    "note": "Weak cues only — must NOT force hybrid; ambiguous → LLM or non-hybrid path"
+    "id": "hist-3", "question": "那 Phase A 呢？", "expected_intent": "ops_doc", "via": "llm", "tags": ["follow_up"],
+    "history": [
+      {"role": "user", "content": "What is Phase B?"},
+      {"role": "assistant", "content": "Phase B is the 12-hour persistence alert policy that sets recommend_alert."}
+    ]
+  },
+  {
+    "id": "hist-4", "question": "does it apply to 12147600 right now?", "expected_intent": "hybrid", "via": "llm", "tags": ["follow_up"],
+    "history": [
+      {"role": "user", "content": "What is Phase B?"},
+      {"role": "assistant", "content": "Phase B is the 12-hour persistence alert policy that sets recommend_alert."}
+    ]
+  },
+  {
+    "id": "hist-5", "question": "帮我把这个告警关掉", "expected_intent": "action_request", "via": "rule", "tags": ["follow_up", "action_beats_history"],
+    "history": [
+      {"role": "user", "content": "12117500 现在浊度多少"},
+      {"role": "assistant", "content": "Turbidity at 12117500 is 62 NTU and the alert tier is HIGH."}
+    ]
+  },
+  {
+    "id": "hist-6", "question": "Thanks!", "expected_intent": "chitchat", "via": "rule", "tags": ["follow_up"],
+    "history": [
+      {"role": "user", "content": "What is Phase B?"},
+      {"role": "assistant", "content": "Phase B is the 12-hour persistence alert policy that sets recommend_alert."}
+    ]
   }
 ]

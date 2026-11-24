@@ -14,8 +14,13 @@ from assistant.copilot_prompts import (
     OFF_TOPIC_ANSWER,
     build_copilot_messages,
 )
-from assistant.llm_client import CompletionResult, LLMClient, sanitize_usage
-from assistant.rag.query_router import Intent, classify_and_rewrite
+from assistant.llm_client import CompletionResult, LLMClient, build_complete_fn, sanitize_usage
+from assistant.rag.query_router import (
+    ROUTER_MAX_TOKENS,
+    Intent,
+    action_request_answer,
+    classify_and_rewrite,
+)
 from assistant.rag.search import SearchHit, ensure_rag_index, search_ops_docs
 
 
@@ -122,11 +127,12 @@ def answer_copilot_question(
             "usage": sanitize_usage(result.usage),
         }
 
-    if classify_fn is not None:
-        router = classify_and_rewrite(question, site_no=site_no, complete_fn=classify_fn)
-    else:
-        client = LLMClient(cfg)
-        router = classify_and_rewrite(question, site_no=site_no, llm_client=client)
+    router = classify_and_rewrite(
+        question,
+        site_no=site_no,
+        complete_fn=classify_fn
+        or build_complete_fn(cfg, max_tokens=ROUTER_MAX_TOKENS, temperature=0.0),
+    )
 
     if router.intent is Intent.CHITCHAT:
         return _canned_response(
@@ -140,6 +146,13 @@ def answer_copilot_question(
             answer=OFF_TOPIC_ANSWER,
             intent=Intent.OFF_TOPIC,
             retrieval_query=router.retrieval_query,
+            cfg=cfg,
+        )
+    if router.intent is Intent.ACTION_REQUEST:
+        return _canned_response(
+            answer=action_request_answer(question),
+            intent=Intent.ACTION_REQUEST,
+            retrieval_query=None,
             cfg=cfg,
         )
     if router.intent is Intent.CLARIFY:

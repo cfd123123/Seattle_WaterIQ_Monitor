@@ -7,7 +7,7 @@ from typing import Any, Callable
 
 from assistant.config import AssistantConfig
 from assistant.llm_client import CompletionResult
-from assistant.rag.query_router import RouterResult
+from assistant.rag.query_router import RouterResult, action_request_answer
 from assistant.rag.search import SearchHit
 
 CompleteFn = Callable[[list[dict[str, Any]]], CompletionResult]
@@ -34,7 +34,7 @@ class AssistantGraphDeps:
     ensure_rag_index: Callable[..., Any]
     search_ops_docs: SearchFn
     session_store: Any
-    looks_like_follow_up: Callable[..., bool]
+    should_reuse_cached_tools: Callable[..., bool]
     build_hybrid_messages: Callable[..., list[dict[str, Any]]]
     canned_chitchat: str
     canned_off_topic: str
@@ -43,3 +43,4 @@ class AssistantGraphDeps:
     classify_fn: ClassifyFn | None = None
     max_tool_rounds: int | None = None
     top_k: int | None = None
+    action_request_answer: Callable[[str], str] = action_request_answer

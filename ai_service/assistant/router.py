@@ -49,7 +49,7 @@ class AssistantChatRequest(BaseModel):
     )
     history: list[HistoryMessage] | None = Field(
         default=None,
-        description="Optional prior turns from the client (fallback when server store is empty).",
+        description="Optional prior turns from the client; fallback when the server store is empty, user turns only.",
     )
     max_tool_rounds: int | None = Field(
         default=None,
@@ -76,6 +76,12 @@ class ToolCallAudit(BaseModel):
     result_preview: dict[str, Any] | None = None
 
 
+class RouteInfo(BaseModel):
+    source: Literal["rule", "llm", "fallback"]
+    labels: dict[str, bool] | None = None
+    matched_rules: list[str] = Field(default_factory=list)
+
+
 class AssistantChatResponse(BaseModel):
     answer: str
     sources: list[AssistantSource]
@@ -86,8 +92,14 @@ class AssistantChatResponse(BaseModel):
     provider: Literal["openai", "ollama", "none"]
     usage: dict[str, int | float] | None = None
     session_id: str | None = None
-    intent: Literal["ops_doc", "live_data", "hybrid", "chitchat", "off_topic", "clarify"] | None = None
+    intent: Literal[
+        "ops_doc", "live_data", "hybrid", "chitchat", "off_topic", "action_request", "clarify"
+    ] | None = None
     retrieval_query: str | None = None
+    route: RouteInfo | None = Field(
+        default=None,
+        description="How the intent was decided: rule vs LLM, predicted labels, rules that fired.",
+    )
 
 
 @router.get("/health", response_model=AssistantHealthResponse)

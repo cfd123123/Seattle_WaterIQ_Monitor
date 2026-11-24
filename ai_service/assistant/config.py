@@ -72,6 +72,7 @@ class AssistantConfig:
     reflect_enabled: bool
     reflect_use_llm: bool
     reflect_max_retries: int
+    structured_output: bool = True
 
     @classmethod
     def from_environ(cls) -> AssistantConfig:
@@ -96,6 +97,7 @@ class AssistantConfig:
             reflect_max_retries = max(0, min(2, int(str(reflect_retries_raw).strip())))
         else:
             reflect_max_retries = 1
+        structured_output = _env_bool("ASSISTANT_STRUCTURED_OUTPUT", default=True)
         return cls(
             master_enabled=master_enabled,
             api_key=api_key,
@@ -110,6 +112,7 @@ class AssistantConfig:
             reflect_enabled=reflect_enabled,
             reflect_use_llm=reflect_use_llm,
             reflect_max_retries=reflect_max_retries,
+            structured_output=structured_output,
         )
 
 

@@ -34,6 +34,21 @@ def _load_puget_allowlist() -> set[str]:
         return set()
 
 
+def puget_site_names() -> dict[str, str]:
+    """``{site_no: display name}`` for the Puget default sites (empty if config missing)."""
+    if not _PUGET_SITES_JSON.is_file():
+        return {}
+    try:
+        payload = json.loads(_PUGET_SITES_JSON.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return {
+        str(s["site_no"]).strip(): str(s.get("name") or "").strip()
+        for s in payload.get("sites") or []
+        if s.get("site_no")
+    }
+
+
 def validate_site_no(site_no: str) -> str:
     """Accept any 8-digit USGS site; normalize and strip."""
     site = str(site_no).strip()

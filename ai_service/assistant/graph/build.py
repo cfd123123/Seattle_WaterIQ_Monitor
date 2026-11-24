@@ -8,9 +8,9 @@ from langgraph.graph import END, START, StateGraph
 
 from assistant.graph.deps import AssistantGraphDeps
 from assistant.graph.state import AssistantState
-from assistant.llm_client import CompletionResult, LLMClient, _merge_usage, sanitize_usage
-from assistant.rag.query_router import Intent
-from assistant.reflect import revise_answer, run_reflection
+from assistant.llm_client import _merge_usage, build_complete_fn, sanitize_usage
+from assistant.rag.query_router import ROUTER_MAX_TOKENS, Intent
+from assistant.reflect import render_tool_facts, revise_answer, run_reflection
 
 
 def _dedupe_doc_sources(hits: list[Any]) -> list[dict[str, str]]:
@@ -149,26 +149,21 @@ def build_assistant_graph(deps: AssistantGraphDeps):
                 "skip_classify": True,
             }
 
-        if deps.classify_fn is not None:
-            router = deps.classify_and_rewrite(
-                state["message"],
-                site_no=state.get("site_no"),
-                complete_fn=deps.classify_fn,
-            )
-        else:
-
-            def _lazy_classify(msgs: list[dict[str, str]]) -> CompletionResult:
-                client = LLMClient(deps.cfg)
-                return client.complete(msgs, temperature=0.0, max_tokens=128)
-
-            router = deps.classify_and_rewrite(
-                state["message"],
-                site_no=state.get("site_no"),
-                complete_fn=_lazy_classify,
-            )
+        classify_fn = deps.classify_fn or build_complete_fn(
+            deps.cfg,
+            max_tokens=ROUTER_MAX_TOKENS,
+            temperature=0.0,
+        )
+        router = deps.classify_and_rewrite(
+            state["message"],
+            site_no=state.get("site_no"),
+            history=state.get("history"),
+            complete_fn=classify_fn,
+        )
         return {
             "intent": router.intent.value,
             "retrieval_query": router.retrieval_query,
+            "route": router.route_info(),
         }
 
     def canned_reply(state: AssistantState) -> dict[str, Any]:
@@ -178,6 +173,8 @@ def build_assistant_graph(deps: AssistantGraphDeps):
             answer = deps.canned_chitchat
         elif intent is Intent.OFF_TOPIC:
             answer = deps.canned_off_topic
+        elif intent is Intent.ACTION_REQUEST:
+            answer = deps.action_request_answer(state["message"])
         else:
             answer = deps.canned_clarify
             intent = Intent.CLARIFY
@@ -234,7 +231,7 @@ def build_assistant_graph(deps: AssistantGraphDeps):
         retrieval_query = state.get("retrieval_query")
 
         cached = deps.session_store.get_cached_tools(session_id, site_no) if session_id else None
-        reuse_cache = bool(cached and deps.looks_like_follow_up(message, history))
+        reuse_cache = bool(cached and deps.should_reuse_cached_tools(message, history, cached[0]))
         audit: list[dict[str, Any]] = []
         tool_payload: dict[str, Any] | None = None
         selection_usage = None
@@ -316,12 +313,22 @@ def build_assistant_graph(deps: AssistantGraphDeps):
             "reflect_action": result.action,
         }
 
-        if result.action == "clarify" or count >= max_retries:
-            updates["answer"] = deps.canned_clarify
-            updates["intent"] = Intent.CLARIFY.value
-            updates["mode"] = "canned"
+        def fail_closed() -> dict[str, Any]:
+            # Prefer code-rendered tool values over a generic clarify: correct data, no LLM wording.
+            facts = render_tool_facts(tool_calls)
+            if facts is not None:
+                updates["answer"] = facts
+                updates["reflect_action"] = "fallback_facts"
+            else:
+                updates["answer"] = deps.canned_clarify
+                updates["intent"] = Intent.CLARIFY.value
+                updates["mode"] = "canned"
+                updates["reflect_action"] = "clarify"
             updates["skip_reflect"] = True
             return updates
+
+        if result.action == "clarify" or count >= max_retries:
+            return fail_closed()
 
         if result.action == "revise_answer" and count < max_retries:
             revised = revise_answer(
@@ -342,11 +349,8 @@ def build_assistant_graph(deps: AssistantGraphDeps):
                 complete_fn=None,
             )
             if not again.ok:
-                updates["answer"] = deps.canned_clarify
-                updates["intent"] = Intent.CLARIFY.value
-                updates["mode"] = "canned"
                 updates["reflect_issues"] = list(result.issues) + list(again.issues)
-                updates["reflect_action"] = "clarify"
+                return fail_closed()
             updates["skip_reflect"] = True
             return updates
 
@@ -390,6 +394,7 @@ def build_assistant_graph(deps: AssistantGraphDeps):
         if intent in {
             Intent.CHITCHAT.value,
             Intent.OFF_TOPIC.value,
+            Intent.ACTION_REQUEST.value,
             Intent.CLARIFY.value,
         }:
             return "canned_reply"
@@ -470,4 +475,5 @@ def invoke_assistant_graph(
         "session_id": final.get("session_id"),
         "intent": final.get("intent"),
         "retrieval_query": final.get("retrieval_query"),
+        "route": final.get("route"),
     }

@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from assistant.orchestrator import answer_agent_question
-from assistant.session_memory import SessionStore, looks_like_follow_up
+from assistant.session_memory import SessionStore, looks_like_follow_up, should_reuse_cached_tools
 from main import app
 
 
@@ -178,3 +178,52 @@ def test_unified_router_persists_session_turns(monkeypatch: pytest.MonkeyPatch) 
     assert "Tool summary" in merged[-1]["content"]
     cached = store.get_cached_tools("persist-test", "12117500")
     assert cached is not None
+
+
+_CACHED_RISK_AUDIT = [
+    {
+        "ok": True,
+        "name": "get_turbidity_risk_forecast_12h",
+        "arguments": {"site_no": "12117500"},
+        "result_preview": {"site_no": "12117500", "max_tier_forecast": "NORMAL"},
+    }
+]
+_RISK_HISTORY = [
+    {"role": "user", "content": "What is the 12h risk for 12117500?"},
+    {"role": "assistant", "content": "Site 12117500: recommend_alert false, tier NORMAL."},
+]
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "What is the 12h risk for 12147600?",  # different site
+        "那 12147600 呢？",  # different site, Chinese follow-up form
+        "12147600 现在浊度多少",  # Chinese used to always count as a follow-up
+        "What is the current discharge at 12117500?",  # same site, different parameter
+        "why is it high now?",  # asks for the present value
+        "Show the flow history",  # "show" contains "how"
+    ],
+)
+def test_cached_tools_not_reused_for_new_data(message: str) -> None:
+    assert should_reuse_cached_tools(message, _RISK_HISTORY, _CACHED_RISK_AUDIT) is False
+
+
+@pytest.mark.parametrize(
+    "message",
+    ["why?", "为什么是 NORMAL？", "what does that mean for 12117500?", "why is turbidity NORMAL there?"],
+)
+def test_cached_tools_reused_for_follow_up_on_same_data(message: str) -> None:
+    assert should_reuse_cached_tools(message, _RISK_HISTORY, _CACHED_RISK_AUDIT) is True
+
+
+def test_client_history_keeps_user_turns_only() -> None:
+    store = SessionStore()
+    merged = store.merge_history(
+        "fresh-session",
+        [
+            {"role": "user", "content": "12h risk for 12117500"},
+            {"role": "assistant", "content": "recommend_alert is true."},
+        ],
+    )
+    assert merged == [{"role": "user", "content": "12h risk for 12117500"}]

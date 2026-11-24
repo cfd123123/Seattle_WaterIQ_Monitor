@@ -8,8 +8,8 @@ from assistant.config import load_assistant_config
 from assistant.graph import AssistantGraphDeps, invoke_assistant_graph
 from assistant.lc.tools import build_readonly_langchain_tools, get_tool_by_name
 from assistant.llm_client import CompletionResult
-from assistant.rag.query_router import Intent, classify_and_rewrite, try_turbidity_sites_list_answer
-from assistant.session_memory import looks_like_follow_up, session_store
+from assistant.rag.query_router import Intent, RouterResult, classify_and_rewrite, try_turbidity_sites_list_answer
+from assistant.session_memory import session_store, should_reuse_cached_tools
 
 
 def test_langchain_readonly_tools_cover_whitelist() -> None:
@@ -46,7 +46,7 @@ def test_langgraph_chitchat_canned(monkeypatch) -> None:
         ensure_rag_index=lambda: None,
         search_ops_docs=lambda *_a, **_k: [],
         session_store=session_store,
-        looks_like_follow_up=looks_like_follow_up,
+        should_reuse_cached_tools=should_reuse_cached_tools,
         build_hybrid_messages=lambda *_a, **_k: [],
         canned_chitchat="Hello from water quality assistant.",
         canned_off_topic="Outside turbidity monitoring scope.",
@@ -97,11 +97,7 @@ def test_langgraph_reflect_blocks_ungrounded_tool_answer(monkeypatch) -> None:
             model="mock",
             provider="ollama",
         ),
-        classify_and_rewrite=lambda *_a, **_k: type(
-            "R",
-            (),
-            {"intent": Intent.LIVE_DATA, "retrieval_query": None},
-        )(),
+        classify_and_rewrite=lambda *_a, **_k: RouterResult(intent=Intent.LIVE_DATA),
         answer_agent_question=fake_agent,
         answer_ops_doc_question=lambda *_a, **_k: {"answer": "docs"},
         select_and_execute_tool=lambda *_a, **_k: (
@@ -113,7 +109,7 @@ def test_langgraph_reflect_blocks_ungrounded_tool_answer(monkeypatch) -> None:
         ensure_rag_index=lambda: None,
         search_ops_docs=lambda *_a, **_k: [],
         session_store=session_store,
-        looks_like_follow_up=looks_like_follow_up,
+        should_reuse_cached_tools=should_reuse_cached_tools,
         build_hybrid_messages=lambda *_a, **_k: [],
         canned_chitchat="Hello from water quality assistant.",
         canned_off_topic="Outside turbidity monitoring scope.",
@@ -125,3 +121,55 @@ def test_langgraph_reflect_blocks_ungrounded_tool_answer(monkeypatch) -> None:
         site_no="12117500",
     )
     assert "88.2" not in payload["answer"]
+
+
+def test_langgraph_reflect_falls_back_to_tool_facts_when_revise_still_wrong(monkeypatch) -> None:
+    """Revise keeps contradicting the API → answer becomes code-rendered tool values, not clarify."""
+    from assistant.reflect import FACTS_FALLBACK_INTRO
+
+    monkeypatch.setenv("ASSISTANT_REFLECT", "true")
+    cfg = load_assistant_config()
+    audit = [
+        {
+            "round": 1,
+            "name": "get_turbidity_risk_forecast_12h",
+            "arguments": {"site_no": "12117500"},
+            "ok": True,
+            "source": "python:/turbidity/risk-forecast-12h",
+            "result_preview": {"site_no": "12117500", "recommend_alert": False, "max_tier_forecast": "NORMAL"},
+        }
+    ]
+    wrong = "Site 12117500 is at tier HIGH and an alert is recommended."
+    deps = AssistantGraphDeps(
+        cfg=cfg,
+        complete_fn=lambda _m: CompletionResult(text=wrong, model="mock", provider="ollama"),
+        classify_and_rewrite=lambda *_a, **_k: RouterResult(intent=Intent.LIVE_DATA),
+        answer_agent_question=lambda *_a, **_k: {
+            "answer": wrong,
+            "sources": [],
+            "tool_calls": audit,
+            "tool_trace": ["get_turbidity_risk_forecast_12h"],
+            "mode": "tools",
+            "model": "mock",
+            "provider": "ollama",
+            "usage": None,
+            "session_id": None,
+        },
+        answer_ops_doc_question=lambda *_a, **_k: {"answer": "docs"},
+        select_and_execute_tool=lambda *_a, **_k: ([], None, CompletionResult(text="{}", model="m", provider="ollama")),
+        try_turbidity_sites_list_answer=try_turbidity_sites_list_answer,
+        ensure_rag_index=lambda: None,
+        search_ops_docs=lambda *_a, **_k: [],
+        session_store=session_store,
+        should_reuse_cached_tools=should_reuse_cached_tools,
+        build_hybrid_messages=lambda *_a, **_k: [],
+        canned_chitchat="hi",
+        canned_off_topic="off",
+        canned_clarify="Please rephrase with a clearer ops question.",
+    )
+    payload = invoke_assistant_graph(deps, message="12h risk for 12117500?", site_no="12117500")
+    assert payload["answer"].startswith(FACTS_FALLBACK_INTRO)
+    assert "max_tier_forecast=NORMAL" in payload["answer"]
+    assert "HIGH" not in payload["answer"]
+    assert payload["intent"] == Intent.LIVE_DATA.value
+    assert payload["mode"] == "tools"

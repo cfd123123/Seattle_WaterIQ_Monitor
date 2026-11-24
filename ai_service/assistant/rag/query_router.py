@@ -1,35 +1,43 @@
-"""Intent classification and retrieval query rewriting for RAG copilot (v2).
+"""Intent routing and retrieval query rewriting for the assistant (v3, multi-label).
 
-Layered routing: deterministic fast paths first, then LLM with schema validation.
-Parse failure / low confidence → clarify (ask the operator to rephrase), not a guessed path.
+The router predicts independent labels — ``in_scope``, ``chitchat``, ``action_request``,
+``need_tools``, ``need_docs`` — and derives the graph branch from them, so ``hybrid`` is
+simply ``need_tools and need_docs`` instead of a class of its own.
+
+Layers:
+1. L0 rules (``route_rules``): high-precision fast paths; abstain when unsure.
+2. L2 LLM: schema-constrained JSON labels, with the recent conversation as context.
+Parse failure → clarify (ask the operator to rephrase), never a guessed path.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 from enum import Enum
-from typing import Callable
+from typing import Any, Callable, Literal
 
-from assistant.copilot_prompts import build_router_messages
-from assistant.llm_client import CompletionResult, LLMClient
+from pydantic import BaseModel, ValidationError
 
-# Below this optional confidence, treat LLM classification as unreliable.
-_MIN_CONFIDENCE = 0.5
-
-_CHITCHAT_FAST_PATH = frozenset(
-    {
-        "hi",
-        "hello",
-        "hey",
-        "thanks",
-        "thank you",
-        "你好",
-        "嗨",
-        "谢谢",
-    }
+from assistant.copilot_prompts import (
+    ACTION_REQUEST_ALERT_HINT,
+    ACTION_REQUEST_ANSWER,
+    ACTION_REQUEST_GENERIC_HINT,
+    ACTION_REQUEST_RULE_HINT,
+    ACTION_REQUEST_SITE_HINT,
+    build_router_messages,
 )
+from assistant.llm_client import CompletionResult
+from assistant.rag.route_rules import Signal, match_rules
+
+# Router replies are a small JSON object; this caps cost and latency of the classify call.
+ROUTER_MAX_TOKENS = 160
+
+# With history, messages this short ("why?", "那上游呢") are treated as follow-ups.
+_SHORT_FOLLOW_UP_CHARS = 12
+
+RouteSource = Literal["rule", "llm", "fallback"]
 
 
 class Intent(str, Enum):
@@ -38,14 +46,153 @@ class Intent(str, Enum):
     HYBRID = "hybrid"
     CHITCHAT = "chitchat"
     OFF_TOPIC = "off_topic"
+    ACTION_REQUEST = "action_request"
     CLARIFY = "clarify"
+
+
+@dataclass(frozen=True)
+class RouteLabels:
+    """Independent routing labels; ``to_intent`` maps them onto a graph branch."""
+
+    in_scope: bool = True
+    chitchat: bool = False
+    action_request: bool = False
+    need_tools: bool = False
+    need_docs: bool = False
+
+    def to_intent(self) -> Intent:
+        # Precedence: a write request is refused before anything else runs; scope gates the rest.
+        if self.action_request:
+            return Intent.ACTION_REQUEST
+        if not self.in_scope:
+            return Intent.OFF_TOPIC
+        if self.need_tools and self.need_docs:
+            return Intent.HYBRID
+        if self.need_tools:
+            return Intent.LIVE_DATA
+        if self.need_docs:
+            return Intent.OPS_DOC
+        if self.chitchat:
+            return Intent.CHITCHAT
+        return Intent.CLARIFY
 
 
 @dataclass(frozen=True)
 class RouterResult:
     intent: Intent
     retrieval_query: str | None = None
-    confidence: float | None = None
+    labels: RouteLabels | None = None
+    source: RouteSource = "llm"
+    matched_rules: tuple[str, ...] = ()
+
+    @classmethod
+    def from_labels(
+        cls,
+        labels: RouteLabels,
+        *,
+        source: RouteSource,
+        retrieval_query: str | None = None,
+        matched_rules: tuple[str, ...] = (),
+    ) -> RouterResult:
+        intent = labels.to_intent()
+        rq = retrieval_query.strip() if isinstance(retrieval_query, str) else None
+        if intent not in {Intent.OPS_DOC, Intent.HYBRID} or not rq:
+            rq = None
+        return cls(
+            intent=intent,
+            retrieval_query=rq,
+            labels=labels,
+            source=source,
+            matched_rules=matched_rules,
+        )
+
+    def route_info(self) -> dict[str, Any]:
+        """Routing trace for the API response and offline eval."""
+        return {
+            "source": self.source,
+            "labels": asdict(self.labels) if self.labels is not None else None,
+            "matched_rules": list(self.matched_rules),
+        }
+
+
+_CLARIFY_FALLBACK = RouterResult(intent=Intent.CLARIFY, labels=RouteLabels(), source="fallback")
+
+
+# ---------------------------------------------------------------------------
+# L2 LLM output: JSON schema (constrained decoding) + validation
+# ---------------------------------------------------------------------------
+
+ROUTER_RESPONSE_FORMAT: dict[str, Any] = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "route_labels",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "in_scope": {"type": "boolean"},
+                "chitchat": {"type": "boolean"},
+                "action_request": {"type": "boolean"},
+                "need_tools": {"type": "boolean"},
+                "need_docs": {"type": "boolean"},
+                "retrieval_query": {"type": "string"},
+            },
+            "required": [
+                "in_scope",
+                "chitchat",
+                "action_request",
+                "need_tools",
+                "need_docs",
+                "retrieval_query",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
+
+class _RouterOutput(BaseModel):
+    """Validates the LLM reply even when the provider ignored ``response_format``."""
+
+    in_scope: bool = True
+    chitchat: bool = False
+    action_request: bool = False
+    need_tools: bool = False
+    need_docs: bool = False
+    retrieval_query: str = ""
+
+
+_LABEL_KEYS = frozenset(_RouterOutput.model_fields) - {"retrieval_query"}
+
+# Single-class replies (older prompt, or a model that ignores the schema) mapped onto labels.
+_INTENT_LABELS: dict[Intent, RouteLabels] = {
+    Intent.OPS_DOC: RouteLabels(need_docs=True),
+    Intent.LIVE_DATA: RouteLabels(need_tools=True),
+    Intent.HYBRID: RouteLabels(need_tools=True, need_docs=True),
+    Intent.CHITCHAT: RouteLabels(chitchat=True),
+    Intent.OFF_TOPIC: RouteLabels(in_scope=False),
+    Intent.ACTION_REQUEST: RouteLabels(action_request=True),
+    Intent.CLARIFY: RouteLabels(),
+}
+
+_INTENT_ALIASES = {
+    "ops": Intent.OPS_DOC,
+    "doc": Intent.OPS_DOC,
+    "documentation": Intent.OPS_DOC,
+    "live": Intent.LIVE_DATA,
+    "data": Intent.LIVE_DATA,
+    "agent": Intent.LIVE_DATA,
+    "mixed": Intent.HYBRID,
+    "chat": Intent.CHITCHAT,
+    "greeting": Intent.CHITCHAT,
+    "offtopic": Intent.OFF_TOPIC,
+    "other": Intent.OFF_TOPIC,
+    "action": Intent.ACTION_REQUEST,
+    "write": Intent.ACTION_REQUEST,
+    "unclear": Intent.CLARIFY,
+    "unknown": Intent.CLARIFY,
+    "ambiguous": Intent.CLARIFY,
+}
 
 
 def _normalize_intent(raw: str) -> Intent | None:
@@ -53,26 +200,7 @@ def _normalize_intent(raw: str) -> Intent | None:
     for intent in Intent:
         if cleaned == intent.value:
             return intent
-    aliases = {
-        "ops": Intent.OPS_DOC,
-        "doc": Intent.OPS_DOC,
-        "documentation": Intent.OPS_DOC,
-        "live": Intent.LIVE_DATA,
-        "data": Intent.LIVE_DATA,
-        "agent": Intent.LIVE_DATA,
-        "mixed": Intent.HYBRID,
-        "hybrid_data_doc": Intent.HYBRID,
-        "chat": Intent.CHITCHAT,
-        "greeting": Intent.CHITCHAT,
-        "offtopic": Intent.OFF_TOPIC,
-        "other": Intent.OFF_TOPIC,
-        "unclear": Intent.CLARIFY,
-        "unknown": Intent.CLARIFY,
-        "ambiguous": Intent.CLARIFY,
-        "need_clarify": Intent.CLARIFY,
-        "need_clarification": Intent.CLARIFY,
-    }
-    return aliases.get(cleaned)
+    return _INTENT_ALIASES.get(cleaned)
 
 
 def _extract_json_object(text: str) -> dict | None:
@@ -100,334 +228,173 @@ def _extract_json_object(text: str) -> dict | None:
     return None
 
 
-def _parse_confidence(raw: object) -> float | None:
-    if raw is None or isinstance(raw, bool):
-        return None
-    if isinstance(raw, (int, float)):
-        value = float(raw)
-        if 0.0 <= value <= 1.0:
-            return value
-        return None
-    if isinstance(raw, str) and raw.strip():
-        try:
-            value = float(raw.strip())
-        except ValueError:
-            return None
-        if 0.0 <= value <= 1.0:
-            return value
-    return None
-
-
-def _parse_line_format(text: str) -> RouterResult | None:
-    intent_raw: str | None = None
-    retrieval_query: str | None = None
-    confidence: float | None = None
-    for line in text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        lower = stripped.lower()
-        if lower.startswith("intent:"):
-            intent_raw = stripped.split(":", 1)[1].strip()
-        elif lower.startswith("retrieval_query:"):
-            retrieval_query = stripped.split(":", 1)[1].strip()
-        elif lower.startswith("confidence:"):
-            confidence = _parse_confidence(stripped.split(":", 1)[1].strip())
-    if not intent_raw:
-        return None
-    intent = _normalize_intent(intent_raw)
-    if intent is None:
-        return None
-    return _validated_router_result(
-        intent=intent,
-        retrieval_query=retrieval_query or None,
-        confidence=confidence,
-    )
-
-
-def _validated_router_result(
-    *,
-    intent: Intent,
-    retrieval_query: str | None,
-    confidence: float | None = None,
-) -> RouterResult:
-    """Schema/confidence gate: invalid or low-confidence → ask the operator to clarify."""
-    if confidence is not None and confidence < _MIN_CONFIDENCE:
-        return RouterResult(intent=Intent.CLARIFY, retrieval_query=None, confidence=confidence)
-
-    rq = retrieval_query.strip() if isinstance(retrieval_query, str) and retrieval_query.strip() else None
-    if intent in {Intent.LIVE_DATA, Intent.CHITCHAT, Intent.OFF_TOPIC, Intent.CLARIFY}:
-        rq = None
-    return RouterResult(intent=intent, retrieval_query=rq, confidence=confidence)
-
-
 def parse_router_output(text: str) -> RouterResult:
-    """Parse LLM router output (JSON preferred, line format fallback).
-
-    Invalid / unparseable output → clarify (return a tip), not a guessed ops/live path.
-    """
+    """Parse the LLM router reply into labels; anything invalid → clarify fallback."""
     payload = _extract_json_object(text)
-    if payload:
-        intent_raw = payload.get("intent")
-        if isinstance(intent_raw, str):
-            intent = _normalize_intent(intent_raw)
-            if intent is not None:
-                rq = payload.get("retrieval_query")
-                retrieval_query = rq.strip() if isinstance(rq, str) and rq.strip() else None
-                confidence = _parse_confidence(payload.get("confidence"))
-                return _validated_router_result(
-                    intent=intent,
-                    retrieval_query=retrieval_query,
-                    confidence=confidence,
-                )
+    if not payload:
+        return _CLARIFY_FALLBACK
 
-    line_result = _parse_line_format(text)
-    if line_result is not None:
-        return line_result
+    if _LABEL_KEYS & payload.keys():
+        try:
+            out = _RouterOutput.model_validate(payload)
+        except ValidationError:
+            return _CLARIFY_FALLBACK
+        labels = RouteLabels(**out.model_dump(exclude={"retrieval_query"}))
+        return RouterResult.from_labels(labels, source="llm", retrieval_query=out.retrieval_query)
 
-    return RouterResult(intent=Intent.CLARIFY, retrieval_query=None)
-
-
-# Strong live-data signals only (avoid treating every "alert" mention as live).
-_LIVE_DATA_KEYWORDS = (
-    "recommend_alert",
-    "recommend alert",
-    "12h risk",
-    "12 h risk",
-    "12-hour risk",
-    "risk forecast",
-    "right now",
-    "current reading",
-    "current turbidity",
-    "current ntu",
-    "live reading",
-    "state snapshot",
-    "alert tier",
-)
-
-_LIVE_DATA_REGEXES = (
-    re.compile(r"\b\d{8}\b"),
-    re.compile(r"\b(what|show|get|fetch)\b.{0,40}\b(risk|forecast|reading|ntu|tier)\b", re.I),
-    re.compile(r"\b(is|was)\s+recommend[_\s]?alert\b", re.I),
-)
-
-# Policy / docs signals for hybrid (must pair with a live signal).
-_HYBRID_DOC_KEYWORDS = (
-    "why",
-    "explain",
-    "policy",
-    "phase b",
-    "phase a",
-    "rule",
-    "r7",
-    "r7a",
-    "r7b",
-    "mean",
-    "meaning",
-    "according to",
-    "runbook",
-    "documentation",
-    "per phase",
-    "什么意思",
-    "为什么",
-    "依据",
-    "政策",
-)
-
-_OPS_DOC_TOPIC_KEYWORDS = (
-    "phase b",
-    "phase a",
-    "runbook",
-    "r7a",
-    "r7b",
-    "r7 ",
-    "recommend_alert",
-    "recommend alert",
-    "monitoring state",
-    "alert tier",
-    "turbidity operations",
-    "是什么",
-    "什么是",
-    "文档",
-)
-
-_OPS_DOC_QUESTION_CUES = (
-    "what is",
-    "what's",
-    "define",
-    "definition",
-    "explain",
-    "mean",
-    "meaning",
-)
-
-
-def _default_hybrid_retrieval_query(question: str) -> str:
-    lowered = question.lower()
-    if "recommend_alert" in lowered or "recommend alert" in lowered:
-        return "recommend_alert Phase B alert policy rules"
-    if "phase b" in lowered:
-        return "Phase B recommend_alert online alert policy"
-    if "r7" in lowered:
-        return "R7 R7a R7b recommend_alert escalation policy"
-    return "recommend_alert Phase B turbidity alert policy"
-
-
-def _has_live_data_cue(question: str) -> bool:
-    lowered = question.lower()
-    if any(k in lowered for k in _LIVE_DATA_KEYWORDS):
-        return True
-    return any(p.search(question) for p in _LIVE_DATA_REGEXES)
-
-
-def _has_policy_cue(question: str) -> bool:
-    lowered = question.lower()
-    return any(k in lowered for k in _HYBRID_DOC_KEYWORDS)
-
-
-def _fast_path_chitchat(question: str) -> RouterResult | None:
-    normalized = question.strip().lower().rstrip("!.?")
-    if normalized in _CHITCHAT_FAST_PATH:
-        return RouterResult(intent=Intent.CHITCHAT, retrieval_query=None)
-    return None
-
-
-def _fast_path_hybrid(question: str) -> RouterResult | None:
-    """Require BOTH a strong live-data cue and a policy/explain cue."""
-    if _has_live_data_cue(question) and _has_policy_cue(question):
-        return RouterResult(
-            intent=Intent.HYBRID,
-            retrieval_query=_default_hybrid_retrieval_query(question),
-        )
-    return None
-
-
-def _fast_path_live_data(question: str) -> RouterResult | None:
-    """Clear live-only asks (no policy/why overlay)."""
-    if not _has_live_data_cue(question):
-        return None
-    if _has_policy_cue(question):
-        return None
-    return RouterResult(intent=Intent.LIVE_DATA, retrieval_query=None)
-
-
-def _fast_path_ops_doc(question: str) -> RouterResult | None:
-    """Clear docs-only asks: product topic + (optional) definition cue; no live-data cues."""
-    if _has_live_data_cue(question):
-        return None
-    lowered = question.lower()
-    has_topic = any(k in lowered for k in _OPS_DOC_TOPIC_KEYWORDS)
-    if not has_topic:
-        return None
-    # Chinese definition forms already listed as topics; English needs a question cue
-    # unless the topic phrase alone is clearly a definition ask (Phase B / R7*).
-    strong_alone = any(
-        k in lowered
-        for k in ("phase b", "phase a", "r7a", "r7b", "runbook", "是什么", "什么是")
+    intent_raw = payload.get("intent")
+    intent = _normalize_intent(intent_raw) if isinstance(intent_raw, str) else None
+    if intent is None:
+        return _CLARIFY_FALLBACK
+    rq = payload.get("retrieval_query")
+    return RouterResult.from_labels(
+        _INTENT_LABELS[intent],
+        source="llm",
+        retrieval_query=rq if isinstance(rq, str) else None,
     )
-    has_question_cue = any(k in lowered for k in _OPS_DOC_QUESTION_CUES)
-    if not (strong_alone or has_question_cue):
+
+
+# ---------------------------------------------------------------------------
+# L0 rules: combine signals, abstain unless the case is unambiguous
+# ---------------------------------------------------------------------------
+
+# Ordered: the first matching hint becomes the BM25 query for rule-routed doc/hybrid asks.
+_RETRIEVAL_HINTS: tuple[tuple[re.Pattern[str], str], ...] = (
+    (re.compile(r"recommend[_\s]alert", re.I), "recommend_alert Phase B alert policy rules"),
+    (re.compile(r"\bphase\s+b\b", re.I), "Phase B online alert recommend_alert"),
+    (re.compile(r"\bphase\s+a\b", re.I), "Phase A turbidity monitoring"),
+    (re.compile(r"\br7[ab]?\b", re.I), "R7 R7a R7b recommend_alert escalation policy"),
+    (re.compile(r"alert\s+tiers?|告警等级", re.I), "alert tier NORMAL WATCH HIGH CRITICAL"),
+    (re.compile(r"monitoring\s+states?|four[-\s]state|监测状态|四态", re.I), "monitoring state four-state turbidity"),
+    (re.compile(r"\brunbook\b|on[-\s]call|值班|运维手册", re.I), "turbidity operations runbook on-call"),
+)
+
+_DEFAULT_HYBRID_QUERY = "recommend_alert Phase B turbidity alert policy"
+
+
+def _rule_retrieval_query(question: str) -> str | None:
+    for pattern, query in _RETRIEVAL_HINTS:
+        if pattern.search(question):
+            return query
+    return None
+
+
+def route_by_rules(question: str, *, has_history: bool = False) -> RouterResult | None:
+    """
+    L0 fast path. Precedence: chitchat → action → (defer follow-ups) → off_topic → hybrid
+    → live_data → ops_doc. Returns ``None`` (abstain) when no high-precision case applies.
+    """
+    m = match_rules(question)
+
+    def decided(labels: RouteLabels, retrieval_query: str | None = None) -> RouterResult:
+        return RouterResult.from_labels(
+            labels,
+            source="rule",
+            retrieval_query=retrieval_query,
+            matched_rules=m.rule_names,
+        )
+
+    if m.has(Signal.CHITCHAT):
+        return decided(RouteLabels(chitchat=True))
+    # Deterministic write-request block: never depends on the LLM noticing it.
+    if m.has(Signal.ACTION) and not m.has(Signal.HOW_TO):
+        return decided(RouteLabels(action_request=True))
+    # Follow-ups need the conversation to be understood — that is the LLM's job.
+    if has_history and (m.has(Signal.CONTEXT_REF) or len(question.strip()) <= _SHORT_FOLLOW_UP_CHARS):
         return None
+    if m.has(Signal.OFF_TOPIC) and not m.has(Signal.DOMAIN):
+        return decided(RouteLabels(in_scope=False))
+    if m.has(Signal.LIVE) and m.has(Signal.POLICY):
+        return decided(
+            RouteLabels(need_tools=True, need_docs=True),
+            _rule_retrieval_query(question) or _DEFAULT_HYBRID_QUERY,
+        )
+    if m.has(Signal.LIVE):
+        return decided(RouteLabels(need_tools=True))
+    if m.has(Signal.DOC_TOPIC) and (m.has(Signal.DEFINITION) or m.has(Signal.POLICY)):
+        return decided(RouteLabels(need_docs=True), _rule_retrieval_query(question))
+    return None
 
-    rq = None
-    if "phase b" in lowered:
-        rq = "Phase B online alert recommend_alert"
-    elif "phase a" in lowered:
-        rq = "Phase A turbidity monitoring"
-    elif "r7" in lowered:
-        rq = "R7 R7a R7b recommend_alert escalation policy"
-    return RouterResult(intent=Intent.OPS_DOC, retrieval_query=rq)
+
+# ---------------------------------------------------------------------------
+# Entry point
+# ---------------------------------------------------------------------------
+
+CompleteFn = Callable[[list[dict[str, Any]]], CompletionResult]
 
 
-# Guard: skip off_topic fast path when the question may be monitoring-related.
-_MONITORING_SCOPE_KEYWORDS = (
-    "turbidity",
-    "flow",
-    "discharge",
-    "usgs",
-    "site",
-    "63680",
-    "00060",
-    "phase a",
-    "phase b",
-    "recommend_alert",
-    "recommend alert",
-    "r7",
-    "r7a",
-    "r7b",
-    "alert",
-    "monitoring",
-    "runbook",
-    "ntu",
-    "puget",
-    "forecast",
-    "wqi",
-    "water quality",
-    "浊度",
-    "流量",
-    "告警",
-)
+def _complete_router(messages: list[dict[str, str]], complete_fn: CompleteFn) -> CompletionResult:
+    """Router call; schema-constrained when the callable supports it."""
+    structured = getattr(complete_fn, "structured", None)
+    if structured is None:
+        return complete_fn(messages)
+    return structured(messages, ROUTER_RESPONSE_FORMAT)
 
-# Obvious OUT_OF_SCOPE phrases from ROUTER_SYSTEM_PROMPT examples (sports, weather, etc.).
-_OFF_TOPIC_KEYWORDS = (
-    "world cup",
-    "super bowl",
-    "basketball",
-    "nba",
-    "nfl",
-    "mlb",
-    "olympics",
-    "soccer",
-    "champions league",
-    "weather forecast",
-    "will it rain",
-    "temperature tomorrow",
-    "what's the weather",
-    "what is the weather",
-    "weather today",
-    "weather tomorrow",
-    "recipe for",
-    "how to cook",
-    "how to bake",
-    "write a poem",
-    "write me a poem",
-    "stock price",
-    "stock market",
-    "nasdaq",
-    "dow jones",
-    "share price",
-    "tell me a joke",
-    "knock knock",
-    "coding tutorial",
-    "learn javascript",
-    "learn python",
-    "latest news",
-    "breaking news",
-)
 
-_OFF_TOPIC_REGEXES = (
-    re.compile(r"\bwho\s+won\b", re.IGNORECASE),
-    re.compile(r"\bfootball\s+(game|match|score)\b", re.IGNORECASE),
-)
+def classify_and_rewrite(
+    question: str,
+    *,
+    site_no: str | None = None,
+    history: list[dict[str, str]] | None = None,
+    complete_fn: CompleteFn | None = None,
+) -> RouterResult:
+    """
+    Predict routing labels and the BM25 retrieval query.
 
-_CREATE_SITE_PHRASES = (
-    "create new site",
-    "create a new site",
-    "create a site",
-    "add new site",
-    "add a new site",
-    "register new site",
-    "register a site",
-    "新建站点",
-    "新建站",
-    "添加站点",
-    "新增站点",
-)
+    Rules first (no LLM call); otherwise one LLM call that sees the recent conversation,
+    so follow-ups like "why?" are classified in context.
+    """
+    ruled = route_by_rules(question, has_history=bool(history))
+    if ruled is not None:
+        return ruled
+    if complete_fn is None:
+        raise ValueError("classify_and_rewrite requires complete_fn when rules abstain")
+    messages = build_router_messages(question, site_no=site_no, history=history)
+    return _apply_rule_constraints(question, parse_router_output(_complete_router(messages, complete_fn).text))
 
-_CREATE_SITE_REGEXES = (
-    re.compile(r"\b(create|add|register)\s+(a\s+)?new\s+site\b", re.IGNORECASE),
-    re.compile(r"(新建|添加|新增).{0,4}站", re.IGNORECASE),
-)
+
+def _apply_rule_constraints(question: str, result: RouterResult) -> RouterResult:
+    """
+    Deterministic vetoes on LLM labels. Small models flag "how do I close an alert?" as a
+    write request even when the prompt says otherwise; a how-to is a docs question (same
+    precedence as ``route_by_rules``), so the rule layer overrides that label.
+    """
+    labels = result.labels
+    if labels is None or not labels.action_request:
+        return result
+    m = match_rules(question)
+    if m.has(Signal.HOW_TO):
+        fixed = replace(labels, action_request=False, need_docs=True)
+        return RouterResult.from_labels(
+            fixed,
+            source=result.source,
+            retrieval_query=result.retrieval_query,
+            matched_rules=m.rule_names,
+        )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Canned answers that bypass the graph branches
+# ---------------------------------------------------------------------------
+
+_ALERT_OBJECT = re.compile(r"\b(?:alerts?|alarms?)\b|告警|报警|预警", re.IGNORECASE)
+_SITE_OBJECT = re.compile(r"\b(?:sites?|stations?)\b|站", re.IGNORECASE)
+_RULE_OBJECT = re.compile(r"\b(?:thresholds?|tiers?|rules?|recommend_alert)\b|阈值|规则|等级", re.IGNORECASE)
+
+
+def action_request_answer(question: str) -> str:
+    """Refuse a write request and point the operator to the page that can do it."""
+    if _RULE_OBJECT.search(question):
+        hint = ACTION_REQUEST_RULE_HINT
+    elif _ALERT_OBJECT.search(question):
+        hint = ACTION_REQUEST_ALERT_HINT
+    elif _SITE_OBJECT.search(question):
+        hint = ACTION_REQUEST_SITE_HINT
+    else:
+        hint = ACTION_REQUEST_GENERIC_HINT
+    return ACTION_REQUEST_ANSWER.format(hint=hint)
+
 
 _TURBIDITY_SITES_CANNED = (
     "Turbidity (63680) monitoring is wired for these Puget Sound sites: "
@@ -449,85 +416,8 @@ _WHICH_TURBIDITY_SITES_REGEXES = (
 )
 
 
-def _looks_in_monitoring_scope(question: str) -> bool:
-    lowered = question.lower()
-    if any(k in lowered for k in _MONITORING_SCOPE_KEYWORDS):
-        return True
-    return bool(re.search(r"\b\d{8}\b", question))
-
-
-def _fast_path_create_site(question: str) -> RouterResult | None:
-    """Heuristic: site registration / creation requests are out of scope."""
-    lowered = question.lower()
-    if any(p in lowered for p in _CREATE_SITE_PHRASES):
-        return RouterResult(intent=Intent.OFF_TOPIC, retrieval_query=None)
-    if any(p.search(question) for p in _CREATE_SITE_REGEXES):
-        return RouterResult(intent=Intent.OFF_TOPIC, retrieval_query=None)
-    return None
-
-
 def try_turbidity_sites_list_answer(question: str) -> str | None:
     """Return canned English answer when the operator asks which sites have turbidity."""
     if any(p.search(question) for p in _WHICH_TURBIDITY_SITES_REGEXES):
         return _TURBIDITY_SITES_CANNED
     return None
-
-
-def _fast_path_off_topic(question: str) -> RouterResult | None:
-    """Heuristic: clearly non-monitoring questions → off_topic without LLM."""
-    if _looks_in_monitoring_scope(question):
-        return None
-    lowered = question.lower()
-    if any(k in lowered for k in _OFF_TOPIC_KEYWORDS):
-        return RouterResult(intent=Intent.OFF_TOPIC, retrieval_query=None)
-    if any(p.search(question) for p in _OFF_TOPIC_REGEXES):
-        return RouterResult(intent=Intent.OFF_TOPIC, retrieval_query=None)
-    return None
-
-
-def classify_and_rewrite(
-    question: str,
-    *,
-    site_no: str | None = None,
-    llm_client: LLMClient | None = None,
-    complete_fn: Callable[[list[dict[str, str]]], CompletionResult] | None = None,
-) -> RouterResult:
-    """
-    Classify operator intent and rewrite the BM25 query in one LLM call.
-
-    Order: chitchat → create-site → hybrid → live_data → ops_doc → off_topic → LLM.
-    LLM parse failure or low confidence → clarify (tip), not a guessed route.
-    """
-    fast = _fast_path_chitchat(question)
-    if fast is not None:
-        return fast
-
-    create_site = _fast_path_create_site(question)
-    if create_site is not None:
-        return create_site
-
-    hybrid = _fast_path_hybrid(question)
-    if hybrid is not None:
-        return hybrid
-
-    off_topic = _fast_path_off_topic(question)
-    if off_topic is not None:
-        return off_topic
-
-    live = _fast_path_live_data(question)
-    if live is not None:
-        return live
-
-    ops = _fast_path_ops_doc(question)
-    if ops is not None:
-        return ops
-
-    messages = build_router_messages(question, site_no=site_no)
-    if complete_fn is not None:
-        result = complete_fn(messages)
-    elif llm_client is not None:
-        result = llm_client.complete(messages, temperature=0.0, max_tokens=128)
-    else:
-        raise ValueError("classify_and_rewrite requires llm_client or complete_fn")
-
-    return parse_router_output(result.text)

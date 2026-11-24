@@ -248,6 +248,45 @@ def get_tool_names() -> list[str]:
     return [t["function"]["name"] for t in get_openai_tools()]
 
 
+# Value constraints the registry YAML cannot express; applied by property name.
+_ARGUMENT_CONSTRAINTS: dict[str, dict[str, Any]] = {
+    "site_no": {"pattern": r"^[0-9]{8}$"},
+    "parameter_cd": {"enum": ["00060", "63680"]},
+}
+
+
+def get_tool_selection_schema(max_tools: int = 3) -> dict[str, Any]:
+    """
+    JSON schema for agent-lite tool selection: ``{"tools": [{"tool", "arguments"}, ...]}``.
+
+    One ``anyOf`` branch per whitelisted tool, so constrained decoding can only emit
+    known tool names with that tool's own argument names. Guarantees shape, not choice.
+    """
+    variants: list[dict[str, Any]] = []
+    for tool in get_openai_tools():
+        fn = tool["function"]
+        params = json.loads(json.dumps(fn["parameters"]))
+        params["additionalProperties"] = False
+        for prop_name, prop in params.get("properties", {}).items():
+            prop.update(_ARGUMENT_CONSTRAINTS.get(prop_name, {}))
+        variants.append(
+            {
+                "type": "object",
+                "properties": {"tool": {"const": fn["name"]}, "arguments": params},
+                "required": ["tool", "arguments"],
+                "additionalProperties": False,
+            }
+        )
+    return {
+        "type": "object",
+        "properties": {
+            "tools": {"type": "array", "maxItems": max_tools, "items": {"anyOf": variants}},
+        },
+        "required": ["tools"],
+        "additionalProperties": False,
+    }
+
+
 def tool_spec_json() -> str:
     """Debug helper: serialized tool specs."""
     return json.dumps(_load_tool_specs(), indent=2)

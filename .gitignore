@@ -93,3 +93,7 @@ ai_service/docs/flow_forecast_pipeline_interview.md
 
 # --- monitor_business internal design docs (local only; see monitor_business/BUSINESS.md in repo) ---
 monitor_business/docs/
+
+# --- Local Claude Code config and personal learning notes ---
+/.claude/
+usgs-water-data-skill/LEARNING_NOTES.md

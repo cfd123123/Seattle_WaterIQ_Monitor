@@ -17,17 +17,28 @@ from assistant.copilot_prompts import (
     build_hybrid_messages,
 )
 from assistant.graph import AssistantGraphDeps, invoke_assistant_graph
-from assistant.llm_client import CompletionResult, LLMClient, _merge_usage, sanitize_usage
+from assistant.llm_client import (
+    CompletionResult,
+    _merge_usage,
+    build_complete_fn,
+    sanitize_usage,
+)
 from assistant.orchestrator import (
     _sources_from_audit,
     _tool_trace,
     answer_agent_question,
     select_and_execute_tool,
 )
-from assistant.rag.query_router import Intent, classify_and_rewrite, try_turbidity_sites_list_answer
+from assistant.rag.query_router import (
+    ROUTER_MAX_TOKENS,
+    Intent,
+    action_request_answer,
+    classify_and_rewrite,
+    try_turbidity_sites_list_answer,
+)
 from assistant.rag.search import SearchHit, ensure_rag_index, search_ops_docs
 from assistant.session_memory import (
-    looks_like_follow_up,
+    should_reuse_cached_tools,
     session_store,
 )
 
@@ -125,7 +136,7 @@ def _answer_hybrid(
     top_k: int | None,
 ) -> dict[str, Any]:
     cached = session_store.get_cached_tools(session_id, site_no) if session_id else None
-    reuse_cache = bool(cached and looks_like_follow_up(message, history or []))
+    reuse_cache = bool(cached and should_reuse_cached_tools(message, history or [], cached[0]))
     audit: list[dict[str, Any]] = []
     tool_payload: dict[str, Any] | None = None
     selection_usage = None
@@ -204,12 +215,7 @@ def _answer_unified_question_legacy(
         return out
 
     if complete_fn is None:
-
-        def _complete_fn(msgs: list[dict[str, Any]]) -> CompletionResult:
-            client = LLMClient(cfg)
-            return client.complete(msgs, max_tokens=768)
-
-        complete_fn = _complete_fn
+        complete_fn = build_complete_fn(cfg)
 
     if not cfg.query_transform:
         payload = answer_agent_question(
@@ -228,15 +234,13 @@ def _answer_unified_question_legacy(
         _persist_session_turns(resolved_session, message, payload, site_no=site_no)
         return payload
 
-    if classify_fn is not None:
-        router = classify_and_rewrite(message, site_no=site_no, complete_fn=classify_fn)
-    else:
-
-        def _lazy_classify(msgs: list[dict[str, str]]) -> CompletionResult:
-            client = LLMClient(cfg)
-            return client.complete(msgs, temperature=0.0, max_tokens=128)
-
-        router = classify_and_rewrite(message, site_no=site_no, complete_fn=_lazy_classify)
+    router = classify_and_rewrite(
+        message,
+        site_no=site_no,
+        history=merged_history,
+        complete_fn=classify_fn
+        or build_complete_fn(cfg, max_tokens=ROUTER_MAX_TOKENS, temperature=0.0),
+    )
 
     if router.intent is Intent.CHITCHAT:
         out = _canned_unified(
@@ -254,6 +258,17 @@ def _answer_unified_question_legacy(
             answer=OFF_TOPIC_ANSWER,
             intent=Intent.OFF_TOPIC,
             retrieval_query=router.retrieval_query,
+            cfg=cfg,
+        )
+        out["session_id"] = resolved_session
+        _persist_session_turns(resolved_session, message, out, site_no=site_no)
+        return out
+
+    if router.intent is Intent.ACTION_REQUEST:
+        out = _canned_unified(
+            answer=action_request_answer(message),
+            intent=Intent.ACTION_REQUEST,
+            retrieval_query=None,
             cfg=cfg,
         )
         out["session_id"] = resolved_session
@@ -336,12 +351,7 @@ def _answer_unified_question_graph(
     cfg = config if config is not None else load_assistant_config()
 
     if complete_fn is None:
-
-        def _complete_fn(msgs: list[dict[str, Any]]) -> CompletionResult:
-            client = LLMClient(cfg)
-            return client.complete(msgs, max_tokens=768)
-
-        complete_fn = _complete_fn
+        complete_fn = build_complete_fn(cfg)
 
     # Bind module-level names at call time so unittest patches still apply.
     deps = AssistantGraphDeps(
@@ -357,7 +367,7 @@ def _answer_unified_question_graph(
         ensure_rag_index=ensure_rag_index,
         search_ops_docs=search_ops_docs,
         session_store=session_store,
-        looks_like_follow_up=looks_like_follow_up,
+        should_reuse_cached_tools=should_reuse_cached_tools,
         build_hybrid_messages=build_hybrid_messages,
         canned_chitchat=CHITCHAT_ANSWER,
         canned_off_topic=OFF_TOPIC_ANSWER,
@@ -390,7 +400,8 @@ def answer_unified_question(
     """
     Unified POST /assistant/chat orchestration: classify intent then route.
 
-    Intents: chitchat, off_topic, ops_doc, live_data, hybrid.
+    Intents (derived from router labels): chitchat, off_topic, action_request, ops_doc,
+    live_data, hybrid, clarify.
     When query_transform is disabled, falls back to live_data (tools loop only).
     Default implementation uses LangGraph; set ASSISTANT_USE_LANGGRAPH=false for legacy.
     """

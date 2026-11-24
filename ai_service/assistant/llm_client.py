@@ -5,9 +5,9 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Callable
 
-from openai import OpenAI
+from openai import BadRequestError, OpenAI
 
 from assistant.config import AssistantConfig, is_ollama_base_url
 
@@ -134,6 +134,7 @@ class LLMClient:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 512,
+        response_format: dict[str, Any] | None = None,
     ) -> CompletionResult:
         kwargs: dict[str, Any] = {
             "model": self._config.model,
@@ -144,6 +145,8 @@ class LLMClient:
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+        if response_format:
+            kwargs["response_format"] = response_format
         response = self._client.chat.completions.create(**kwargs)
         choice = response.choices[0]
         message = choice.message
@@ -164,6 +167,7 @@ class LLMClient:
         *,
         temperature: float = 0.2,
         max_tokens: int = 512,
+        response_format: dict[str, Any] | None = None,
     ) -> CompletionResult:
         last_error: Exception | None = None
         for attempt in range(MAX_RETRIES + 1):
@@ -172,7 +176,11 @@ class LLMClient:
                     messages=messages,
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    response_format=response_format,
                 )
+            except BadRequestError as exc:
+                # 4xx (e.g. unsupported response_format) will not succeed on retry.
+                raise RuntimeError(f"LLM completion rejected: {exc}") from exc
             except Exception as exc:
                 last_error = exc
                 if attempt < MAX_RETRIES:
@@ -217,3 +225,49 @@ class LLMClient:
                     f"LLM tool completion failed after {MAX_RETRIES + 1} attempt(s)"
                 ) from last_error
         raise RuntimeError("LLM tool completion failed")  # unreachable
+
+
+CompleteFn = Callable[[list[dict[str, Any]]], CompletionResult]
+
+
+def build_complete_fn(
+    config: AssistantConfig,
+    *,
+    max_tokens: int = 768,
+    temperature: float = 0.2,
+) -> CompleteFn:
+    """
+    Default plain-text completion callable used across assistant paths.
+
+    When ``config.structured_output`` is on, the callable also carries a
+    ``structured(messages, response_format)`` attribute for schema-constrained JSON
+    (e.g. agent-lite tool selection). Servers that reject ``response_format`` fall
+    back to an unconstrained completion. Injected test callables simply lack it.
+    """
+
+    def _complete(messages: list[dict[str, Any]]) -> CompletionResult:
+        return LLMClient(config).complete(messages, temperature=temperature, max_tokens=max_tokens)
+
+    if not config.structured_output:
+        return _complete
+
+    def _structured(
+        messages: list[dict[str, Any]],
+        response_format: dict[str, Any],
+    ) -> CompletionResult:
+        client = LLMClient(config)
+        try:
+            return client.complete(
+                messages,
+                temperature=0.0,
+                max_tokens=max_tokens,
+                response_format=response_format,
+            )
+        except RuntimeError as exc:
+            if not isinstance(exc.__cause__, BadRequestError):
+                raise
+            logger.warning("response_format rejected by provider; using unconstrained JSON: %s", exc)
+            return client.complete(messages, temperature=temperature, max_tokens=max_tokens)
+
+    _complete.structured = _structured  # type: ignore[attr-defined]
+    return _complete

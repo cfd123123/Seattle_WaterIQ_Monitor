@@ -14,6 +14,7 @@ class AssistantState(TypedDict):
     history: NotRequired[list[dict[str, str]]]
     intent: NotRequired[str | None]
     retrieval_query: NotRequired[str | None]
+    route: NotRequired[dict[str, Any] | None]
     answer: NotRequired[str]
     sources: NotRequired[list[dict[str, str]]]
     tool_calls: NotRequired[list[dict[str, Any]]]

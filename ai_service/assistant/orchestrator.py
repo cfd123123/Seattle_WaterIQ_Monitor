@@ -13,14 +13,20 @@ from assistant.agent_prompts import (
     AGENT_SYSTEM_PROMPT,
 )
 from assistant.config import AssistantConfig, load_assistant_config
-from assistant.llm_client import CompletionResult, LLMClient, ToolsNotSupportedError, _merge_usage
+from assistant.llm_client import (
+    CompletionResult,
+    LLMClient,
+    ToolsNotSupportedError,
+    _merge_usage,
+    build_complete_fn,
+)
 from assistant.session_memory import (
     format_cached_tool_context,
-    looks_like_follow_up,
+    should_reuse_cached_tools,
     session_store,
 )
-from assistant.tools.executor import execute_tool
-from assistant.tools.registry import get_openai_tools
+from assistant.tools.executor import execute_tool, puget_site_names
+from assistant.tools.registry import get_openai_tools, get_tool_selection_schema
 
 logger = logging.getLogger(__name__)
 
@@ -89,14 +95,107 @@ def _parse_json_object(text: str) -> dict[str, Any] | None:
         return None
 
 
+def _complete_tool_selection(
+    messages: list[dict[str, Any]],
+    complete_fn: CompleteFn,
+) -> CompletionResult:
+    """Agent-lite tool pick; schema-constrained when the callable supports it."""
+    structured = getattr(complete_fn, "structured", None)
+    if structured is None:
+        return complete_fn(messages)
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "tool_selection",
+            "schema": get_tool_selection_schema(),
+            "strict": True,
+        },
+    }
+    return structured(messages, response_format)
+
+
+_SITE_NO_IN_TEXT = re.compile(r"\b\d{8}\b")
+_SITE_NAME_SUFFIX = re.compile(r"\s+(?:near|below|above|at)\s+.*$", re.IGNORECASE)
+_SITE_TOOLS = frozenset(
+    t["function"]["name"]
+    for t in get_openai_tools()
+    if "site_no" in t["function"]["parameters"].get("required", [])
+)
+
+
+def _user_provided_sites(
+    message: str,
+    site_no: str | None,
+    history: list[dict[str, str]] | None = None,
+) -> set[str]:
+    """Sites the conversation actually names: 8-digit ids, context site, or default-site names."""
+    texts = [message] + [str(turn.get("content", "")) for turn in history or []]
+    sites = {m for text in texts for m in _SITE_NO_IN_TEXT.findall(text)}
+    if site_no and site_no.strip():
+        sites.add(site_no.strip())
+    joined = " ".join(texts).lower()
+    for default_site, name in puget_site_names().items():
+        river = _SITE_NAME_SUFFIX.sub("", name).strip().lower()
+        if river and river in joined:
+            sites.add(default_site)
+    return sites
+
+
+def _needs_site_clarification(audit: list[ToolAuditEntry]) -> bool:
+    """No tool succeeded and at least one was blocked for an unspecified site."""
+    if any(entry.get("ok") for entry in audit):
+        return False
+    return any(entry.get("error_code") == "SITE_NOT_SPECIFIED" for entry in audit)
+
+
+def _site_clarification_answer() -> str:
+    lines = [
+        "Which site do you mean? Please include a USGS 8-digit site number.",
+        "Default Puget Sound sites:",
+    ]
+    lines += [f"- {site} {name}" for site, name in puget_site_names().items()]
+    return "\n".join(lines)
+
+
 def _run_tool_call(
     name: str,
     arguments: dict[str, Any],
     *,
     round_no: int,
     audit: list[ToolAuditEntry],
+    allowed_sites: set[str] | None = None,
 ) -> dict[str, Any]:
-    result = execute_tool(name, arguments)
+    """
+    Execute one tool call and record it in ``audit``.
+
+    With ``allowed_sites``, a site-scoped call is blocked unless its site_no came from
+    the user or an earlier tool result (no guessed sites). An omitted site_no is left
+    to executor validation when the user did name a site. If exactly one site is known,
+    a mismatched site_no is replaced with it (the user's site wins over a model guess).
+    Successful results extend ``allowed_sites`` so the agent may act on sites a tool returned.
+    """
+    site = str(arguments.get("site_no", "")).strip()
+    if allowed_sites is not None and name in _SITE_TOOLS and site and len(allowed_sites) == 1:
+        (only_site,) = allowed_sites
+        if site != only_site:
+            logger.info("Replacing model site_no %s with user site %s", site, only_site)
+            arguments = {**arguments, "site_no": only_site}
+            site = only_site
+    blocked = (
+        allowed_sites is not None
+        and name in _SITE_TOOLS
+        and (site not in allowed_sites if site else not allowed_sites)
+    )
+    if blocked:
+        result: dict[str, Any] = {
+            "ok": False,
+            "error_code": "SITE_NOT_SPECIFIED",
+            "message": "The user has not specified this site. Do not guess; ask which USGS site they mean.",
+        }
+    else:
+        result = execute_tool(name, arguments)
+        if allowed_sites is not None and result.get("ok"):
+            allowed_sites.update(_SITE_NO_IN_TEXT.findall(json.dumps(result, default=str)))
     audit.append(
         {
             "round": round_no,
@@ -206,10 +305,13 @@ def _run_tool_selections(
     selections: list[tuple[str, dict[str, Any]]],
     *,
     audit: list[ToolAuditEntry],
+    allowed_sites: set[str] | None = None,
 ) -> list[dict[str, Any]]:
     payloads: list[dict[str, Any]] = []
     for idx, (name, args) in enumerate(selections, start=1):
-        payloads.append(_run_tool_call(name, args, round_no=idx, audit=audit))
+        payloads.append(
+            _run_tool_call(name, args, round_no=idx, audit=audit, allowed_sites=allowed_sites)
+        )
     return payloads
 
 
@@ -219,6 +321,7 @@ def _run_tools_loop(
     *,
     max_rounds: int,
     complete_with_tools_fn: CompleteWithToolsFn,
+    allowed_sites: set[str] | None = None,
 ) -> tuple[str, list[ToolAuditEntry], CompletionResult | None, dict[str, Any] | None]:
     audit: list[ToolAuditEntry] = []
     usage_acc: dict[str, Any] | None = None
@@ -254,7 +357,9 @@ def _run_tools_loop(
                 args = {}
             if not isinstance(args, dict):
                 args = {}
-            tool_result = _run_tool_call(tc.name, args, round_no=round_no, audit=audit)
+            tool_result = _run_tool_call(
+                tc.name, args, round_no=round_no, audit=audit, allowed_sites=allowed_sites
+            )
             working.append(
                 {
                     "role": "tool",
@@ -280,18 +385,22 @@ def _run_agent_lite(
     site_no: str | None,
     *,
     complete_fn: CompleteFn,
+    allowed_sites: set[str] | None = None,
 ) -> tuple[str, list[ToolAuditEntry], CompletionResult, dict[str, Any] | None]:
     audit: list[ToolAuditEntry] = []
     select_messages: list[dict[str, str]] = [
         {"role": "system", "content": AGENT_LITE_TOOL_SELECT_PROMPT},
         {"role": "user", "content": _build_user_message(message, site_no)},
     ]
-    selection = complete_fn(select_messages)
+    selection = _complete_tool_selection(select_messages, complete_fn)
     usage_acc = selection.usage
 
     payload = _parse_json_object(selection.text)
     selections = _selections_from_router_payload(payload, site_no=site_no)
-    tool_payloads = _run_tool_selections(selections, audit=audit)
+    tool_payloads = _run_tool_selections(selections, audit=audit, allowed_sites=allowed_sites)
+    if _needs_site_clarification(audit):
+        # Caller replaces the answer with a deterministic clarify; skip the summarize call.
+        return "", audit, selection, usage_acc
 
     summarize_user_parts = [
         f"User question: {message.strip()}",
@@ -333,11 +442,15 @@ def select_and_execute_tool(
         {"role": "system", "content": AGENT_LITE_TOOL_SELECT_PROMPT},
         {"role": "user", "content": _build_user_message(message, site_no)},
     ]
-    selection = complete_fn(select_messages)
+    selection = _complete_tool_selection(select_messages, complete_fn)
 
     payload = _parse_json_object(selection.text)
     selections = _selections_from_router_payload(payload, site_no=site_no)
-    tool_payloads = _run_tool_selections(selections, audit=audit)
+    tool_payloads = _run_tool_selections(
+        selections,
+        audit=audit,
+        allowed_sites=_user_provided_sites(message, site_no),
+    )
     tool_payload = tool_payloads[0] if tool_payloads else None
     return audit, tool_payload, selection
 
@@ -395,12 +508,7 @@ def answer_agent_question(
     resolved_history = history or []
 
     if complete_fn is None:
-
-        def _complete_fn(msgs: list[dict[str, Any]]) -> CompletionResult:
-            client = LLMClient(cfg)
-            return client.complete(msgs, max_tokens=768)
-
-        complete_fn = _complete_fn
+        complete_fn = build_complete_fn(cfg)
 
     if complete_with_tools_fn is None:
 
@@ -426,7 +534,7 @@ def answer_agent_question(
     if session_id:
         cached = session_store.get_cached_tools(session_id, site_no)
 
-    if cached and looks_like_follow_up(message, resolved_history):
+    if cached and should_reuse_cached_tools(message, resolved_history, cached[0]):
         cached_audit, cached_payloads = cached
         answer, audit, last, usage_acc = _answer_from_cached_tools(
             message,
@@ -452,6 +560,7 @@ def answer_agent_question(
         }
 
     base_messages = _build_agent_messages(message, site_no, history=resolved_history)
+    allowed_sites = _user_provided_sites(message, site_no, resolved_history)
 
     try:
         answer, audit, last, usage_acc = _run_tools_loop(
@@ -459,6 +568,7 @@ def answer_agent_question(
             tools,
             max_rounds=max_rounds,
             complete_with_tools_fn=complete_with_tools_fn,
+            allowed_sites=allowed_sites,
         )
         if last is not None:
             model = last.model
@@ -470,6 +580,7 @@ def answer_agent_question(
                 message,
                 site_no,
                 complete_fn=complete_fn,
+                allowed_sites=allowed_sites,
             )
             mode = "agent_lite"
             model = last.model
@@ -480,10 +591,16 @@ def answer_agent_question(
             message,
             site_no,
             complete_fn=complete_fn,
+            allowed_sites=allowed_sites,
         )
         mode = "agent_lite"
         model = last.model
         provider = last.provider
+
+    if _needs_site_clarification(audit):
+        # Deterministic ask-back: never let the model answer with a guessed site.
+        answer = _site_clarification_answer()
+        mode = "canned"
 
     return {
         "answer": answer,

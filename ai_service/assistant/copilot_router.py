@@ -37,7 +37,9 @@ class CopilotChatResponse(BaseModel):
     model: str | None = None
     provider: Literal["openai", "ollama", "none"]
     usage: dict[str, int | float] | None = None
-    intent: Literal["ops_doc", "live_data", "hybrid", "chitchat", "off_topic", "clarify"] | None = None
+    intent: Literal[
+        "ops_doc", "live_data", "hybrid", "chitchat", "off_topic", "action_request", "clarify"
+    ] | None = None
     retrieval_query: str | None = None
 
 

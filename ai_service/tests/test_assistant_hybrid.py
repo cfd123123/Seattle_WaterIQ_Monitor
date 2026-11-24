@@ -193,6 +193,28 @@ def test_unified_off_topic_canned(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "outside turbidity" in payload["answer"].lower()
 
 
+@pytest.mark.parametrize("use_langgraph", ["true", "false"])
+def test_unified_action_request_refused_with_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+    use_langgraph: str,
+) -> None:
+    monkeypatch.setenv("ASSISTANT_QUERY_TRANSFORM", "true")
+    monkeypatch.setenv("ASSISTANT_USE_LANGGRAPH", use_langgraph)
+
+    def no_llm(_messages: list[dict[str, str]]) -> CompletionResult:
+        raise AssertionError("write requests are blocked by rules before any LLM call")
+
+    payload = answer_unified_question("create a new site", classify_fn=no_llm, complete_fn=no_llm)
+    assert payload["intent"] == "action_request"
+    assert payload["mode"] == "canned"
+    assert payload["tool_calls"] == []
+    assert "Stations page" in payload["answer"]
+    if use_langgraph == "true":
+        assert payload["route"]["source"] == "rule"
+        assert payload["route"]["labels"]["action_request"] is True
+        assert "action.imperative_en" in payload["route"]["matched_rules"]
+
+
 def test_unified_parse_failure_clarify(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ASSISTANT_QUERY_TRANSFORM", "true")
 

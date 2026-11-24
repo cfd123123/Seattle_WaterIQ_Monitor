@@ -6,55 +6,67 @@ import json
 from typing import Any
 
 ROUTER_SYSTEM_PROMPT = """\
-You route operator questions for a USGS Puget Sound turbidity/flow monitoring assistant.
+You route operator questions for a READ-ONLY USGS Puget Sound turbidity/flow monitoring assistant.
+Answer five independent yes/no labels about the LATEST question. Do not pick a single category.
 
-STEP 1 — SCOPE (mandatory):
-IN_SCOPE topics:
-- USGS turbidity (63680) and flow (00060) monitoring for Puget Sound sites
-- Phase A / Phase B alert policy, recommend_alert, R7 / R7a / R7b, monitoring states, runbooks
-- Indexed project ops docs, backtest reports, and on-call procedures for this product
-- Read-only live data: current readings, 12h risk forecast, site status, alert lists for monitored sites
+- in_scope: true if the question concerns this monitoring product — USGS turbidity (63680) or flow (00060) \
+at Puget Sound sites, alerts, recommend_alert, Phase A / Phase B, R7 / R7a / R7b, monitoring states, \
+forecasts, runbooks, or how to use this assistant (greetings count as in scope). \
+False for unrelated topics: sports, stocks, recipes, general coding, news, general weather not tied to a site.
+- chitchat: a greeting, thanks, or small talk with no real question.
+- action_request: the operator asks you to CHANGE something — create/edit/delete a site, acknowledge or \
+close an alert, change thresholds, tiers, or recommend_alert. Asking HOW to do it is NOT an action request \
+(that is need_docs).
+- need_tools: answering needs live read-only data — current readings, forecasts, 12h risk, alert tier, \
+state snapshot, or any present value at a specific site.
+- need_docs: answering needs documentation — definitions, policies, rules, runbooks, or why something happens.
 
-OUT_OF_SCOPE (must use intent off_topic):
-- General world knowledge unrelated to this monitoring project (history, sports, recipes, coding tutorials, etc.)
-- Weather, stocks, or news unless explicitly tied to turbidity/flow ops at a monitored site
-- Requests to change alerts, tiers, or any write/mutation action
+Tie-breaking:
+- Unsure whether data or docs are needed → set BOTH need_tools and need_docs to true.
+- Unsure whether the question is in scope → set in_scope to true.
 
-STEP 2 — If IN_SCOPE, classify intent as exactly one of:
-- ops_doc — documentation, definitions, policies, runbooks (no live API data needed)
-- live_data — current readings, forecasts, site status, alert state (data only)
-- hybrid — needs BOTH live tool data AND ops documentation (e.g. "why is recommend_alert true per Phase B?")
-- chitchat — greetings, thanks, brief small talk about using the assistant
-- clarify — question is ambiguous; you are not confident enough to choose ops_doc/live_data/hybrid
+retrieval_query: when need_docs is true, a short English keyword phrase for BM25 search \
+(English even if the question is Chinese; keep product terms like Phase B, recommend_alert, R7a). \
+Otherwise an empty string.
 
-When intent is ops_doc or hybrid, set retrieval_query to a short English keyword phrase for BM25 search \
-(use English even if the question is Chinese; keep product terms like Phase B, recommend_alert, R7a).
-For live_data, chitchat, off_topic, and clarify, use an empty retrieval_query string.
-
-Optional confidence (0.0–1.0): include only if you can estimate it. If below 0.5, prefer intent clarify.
+Use "Conversation so far" only to resolve follow-ups such as "why?", "what about the other site?", "那上游呢".
 
 Reply with ONLY one JSON object, no markdown:
-{"intent": "<ops_doc|live_data|hybrid|chitchat|off_topic|clarify>", "retrieval_query": "<english keywords or empty string>", "confidence": <0.0-1.0 optional>}
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": false, "need_docs": false, \
+"retrieval_query": ""}
 
 Examples:
-Question: 你好
-{"intent": "chitchat", "retrieval_query": "", "confidence": 1.0}
+Latest question: 你好
+{"in_scope": true, "chitchat": true, "action_request": false, "need_tools": false, "need_docs": false, "retrieval_query": ""}
 
-Question: Who won the World Cup?
-{"intent": "off_topic", "retrieval_query": "", "confidence": 1.0}
+Latest question: Who won the World Cup?
+{"in_scope": false, "chitchat": false, "action_request": false, "need_tools": false, "need_docs": false, "retrieval_query": ""}
 
-Question: Phase B 是什么
-{"intent": "ops_doc", "retrieval_query": "Phase B online alert recommend_alert", "confidence": 0.9}
+Latest question: Phase B 是什么
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": false, "need_docs": true, "retrieval_query": "Phase B online alert recommend_alert"}
 
-Question: What is turbidity at site 12117500 right now?
-{"intent": "live_data", "retrieval_query": "", "confidence": 0.9}
+Latest question: What is turbidity at site 12117500 right now?
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": true, "need_docs": false, "retrieval_query": ""}
 
-Question: Why is recommend_alert true for site 12117500 and what does Phase B say?
-{"intent": "hybrid", "retrieval_query": "recommend_alert Phase B alert policy", "confidence": 0.9}
+Latest question: Why is recommend_alert true for site 12117500 and what does Phase B say?
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": true, "need_docs": true, "retrieval_query": "recommend_alert Phase B alert policy"}
 
-Question: help with that thing
-{"intent": "clarify", "retrieval_query": "", "confidence": 0.2}
+Latest question: Please close alert 42
+{"in_scope": true, "chitchat": false, "action_request": true, "need_tools": false, "need_docs": false, "retrieval_query": ""}
+
+Latest question: How do I close an alert?
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": false, "need_docs": true, "retrieval_query": "acknowledge close alert procedure"}
+
+Conversation so far:
+user: What is the current turbidity at 12117500?
+assistant: Turbidity at 12117500 is 62 NTU, alert tier HIGH.
+Latest question: why so high?
+{"in_scope": true, "chitchat": false, "action_request": false, "need_tools": true, "need_docs": true, "retrieval_query": "turbidity high alert tier cause"}
 """
+
+# Router context window: last N turns, each truncated (assistant answers can be long).
+ROUTER_HISTORY_TURNS = 4
+ROUTER_HISTORY_CHARS = 300
 
 COPILOT_SYSTEM_PROMPT = """\
 You are a water-quality operations copilot for USGS turbidity monitoring.
@@ -99,9 +111,22 @@ CLARIFY_ANSWER = (
     "I'm not sure what you need yet. Please rephrase using one clear ask: "
     "(1) docs — e.g. What is the online turbidity alert policy?; "
     "(2) live data — e.g. 12h turbidity risk for site 12117500; "
-    "(3) both — e.g. why is recommend_alert true for 12117500 according to the alert rules?. "
-    "I cannot change alerts, tiers, or create sites."
+    "(3) both — e.g. why is recommend_alert true for 12117500 according to the alert rules?"
 )
+
+ACTION_REQUEST_ANSWER = (
+    "I can't make changes — this assistant is read-only. {hint} "
+    "I can still look up current readings and forecasts, or explain the alert rules."
+)
+ACTION_REQUEST_SITE_HINT = (
+    "To register or edit a monitoring site, use the Stations page (USGS site numbers are verified on save)."
+)
+ACTION_REQUEST_ALERT_HINT = "To acknowledge or close an alert, use the alert list on the Dashboard page."
+ACTION_REQUEST_RULE_HINT = (
+    "Thresholds, tiers, and recommend_alert come from deterministic rules and server configuration "
+    "owned by admins; they cannot be overridden from chat."
+)
+ACTION_REQUEST_GENERIC_HINT = "Please make changes from the monitoring dashboard."
 
 LIVE_DATA_ANSWER = (
     "Live site readings and forecasts are not available in documentation mode. "
@@ -139,10 +164,22 @@ def build_router_messages(
     question: str,
     *,
     site_no: str | None = None,
+    history: list[dict[str, str]] | None = None,
 ) -> list[dict[str, str]]:
-    """Build messages for intent classification + retrieval query rewrite."""
+    """Build messages for label classification + retrieval query rewrite.
+
+    History goes into the user message as a transcript (not as chat turns), so the
+    router classifies the latest question instead of continuing the conversation.
+    """
     site_line = f"Operator focus site: {site_no}\n" if site_no else ""
-    user_content = f"{site_line}Question: {question}"
+    transcript = ""
+    if history:
+        lines = [
+            f"{turn.get('role', 'user')}: {str(turn.get('content', ''))[:ROUTER_HISTORY_CHARS]}"
+            for turn in history[-ROUTER_HISTORY_TURNS:]
+        ]
+        transcript = "Conversation so far:\n" + "\n".join(lines) + "\n"
+    user_content = f"{site_line}{transcript}Latest question: {question}"
     return [
         {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},

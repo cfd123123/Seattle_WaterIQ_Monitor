@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import threading
 import time
 import uuid
 from collections import OrderedDict
 from typing import Any
+
+from assistant.rag.route_rules import Signal, extract_site_numbers, match_rules
 
 MAX_TURNS_PER_SESSION = 10
 MAX_SESSIONS = 500
@@ -25,20 +28,24 @@ FRESH_DATA_KEYWORDS = (
     "fetch again",
 )
 
-FOLLOW_UP_KEYWORDS = (
-    "why",
-    "what about",
-    "explain",
-    "detail",
-    "more about",
-    "mean",
-    "recommend",
-    "how",
-    "which",
-    "tell me more",
-    "break down",
-    "clarify",
+# Word-bounded: plain substrings made "show" a follow-up ("how") and "meantime" one ("mean").
+_FOLLOW_UP_RE = re.compile(
+    r"\b(?:why|what\s+about|how\s+about|explain|details?|more\s+about|means?|meaning|"
+    r"tell\s+me\s+more|break\s+(?:it\s+)?down|clarify)\b"
+    r"|为什么|解释|什么意思|详细|原因|怎么回事",
+    re.IGNORECASE,
 )
+
+# Asking for the present value ("now", "current", "现在") always refetches, whatever the cache age.
+_LIVE_TEMPORAL_RULES = frozenset({"live.temporal_en", "live.zh"})
+
+_PARAMETER_CUES: tuple[tuple[str, re.Pattern[str]], ...] = (
+    ("00060", re.compile(r"\b(?:flow|discharge|streamflow|cfs|00060)\b|流量", re.IGNORECASE)),
+    ("63680", re.compile(r"\b(?:turbidity|ntu|63680)\b|浊度", re.IGNORECASE)),
+)
+
+# Tools without a parameter_cd argument that only ever return turbidity.
+_TURBIDITY_ONLY_TOOLS = frozenset({"get_turbidity_risk_forecast_12h", "get_turbidity_state_snapshot"})
 
 
 class _SessionState:
@@ -87,7 +94,13 @@ class SessionStore:
         session_id: str,
         client_history: list[dict[str, str]] | None,
     ) -> list[dict[str, str]]:
-        """Return recent turns, preferring server store then client-supplied history."""
+        """
+        Recent turns: the server store is the source of truth.
+
+        Client-supplied history is only a fallback (new session, process restart) and keeps
+        user turns only — a client must not be able to put words in the assistant's mouth
+        ("assistant: recommend_alert is true") and have the model treat them as its own.
+        """
         with self._lock:
             state = self._get_or_create(session_id)
             if state.turns:
@@ -98,7 +111,7 @@ class SessionStore:
         for turn in client_history:
             role = str(turn.get("role", "")).strip()
             content = str(turn.get("content", "")).strip()
-            if role in ("user", "assistant") and content:
+            if role == "user" and content:
                 cleaned.append({"role": role, "content": content})
         return cleaned[-HISTORY_LIMIT:]
 
@@ -156,15 +169,60 @@ class SessionStore:
 
 
 def looks_like_follow_up(message: str, history: list[dict[str, str]]) -> bool:
-    """Heuristic: short or detail-oriented question after prior turns."""
+    """A question about the previous answer (why / explain / that / 那…呢), not a new data ask."""
     if not history:
         return False
     lowered = message.lower()
     if any(k in lowered for k in FRESH_DATA_KEYWORDS):
         return False
-    if any(k in lowered for k in FOLLOW_UP_KEYWORDS):
+    if _FOLLOW_UP_RE.search(message):
         return True
-    return len(message.split()) <= 14
+    return match_rules(message).has(Signal.CONTEXT_REF)
+
+
+def _cached_scope(audit: list[dict[str, Any]]) -> tuple[set[str], set[str]]:
+    """Sites and parameter codes the cached tool results actually cover."""
+    sites: set[str] = set()
+    params: set[str] = set()
+    for entry in audit:
+        if not entry.get("ok"):
+            continue
+        for source in (entry.get("arguments"), entry.get("result_preview")):
+            if not isinstance(source, dict):
+                continue
+            if source.get("site_no"):
+                sites.add(str(source["site_no"]).strip())
+            if source.get("parameter_cd"):
+                params.add(str(source["parameter_cd"]).strip())
+        if entry.get("name") in _TURBIDITY_ONLY_TOOLS:
+            params.add("63680")
+    return sites, params
+
+
+def should_reuse_cached_tools(
+    message: str,
+    history: list[dict[str, str]],
+    cached_audit: list[dict[str, Any]],
+) -> bool:
+    """
+    Reuse the previous turn's tool results only for a genuine follow-up about the same data.
+
+    Refetch when the question asks for the present value, or names a site or parameter
+    the cache does not cover — otherwise "what about 12147600?" or "现在流量呢" would be
+    answered with another site's (or parameter's) data, up to the cache TTL old.
+    """
+    if not looks_like_follow_up(message, history):
+        return False
+    if _LIVE_TEMPORAL_RULES & set(match_rules(message).rule_names):
+        return False
+    cached_sites, cached_params = _cached_scope(cached_audit)
+    asked_sites = extract_site_numbers(message)
+    if asked_sites and not asked_sites <= cached_sites:
+        return False
+    asked_params = {code for code, cue in _PARAMETER_CUES if cue.search(message)}
+    if asked_params and not asked_params <= cached_params:
+        return False
+    return True
 
 
 def format_cached_tool_context(

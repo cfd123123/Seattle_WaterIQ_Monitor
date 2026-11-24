@@ -1,0 +1,16 @@
+{
+  "name": "usgs-water-data",
+  "owner": {
+    "name": "fdc"
+  },
+  "metadata": {
+    "description": "USGS NWIS water data skill for Claude: site search and real-time streamflow / water-quality downloads."
+  },
+  "plugins": [
+    {
+      "name": "usgs-water-data",
+      "source": "./",
+      "description": "Find USGS monitoring sites and download real-time streamflow and water-quality data from NWIS."
+    }
+  ]
+}

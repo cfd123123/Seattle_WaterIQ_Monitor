@@ -1,0 +1,10 @@
+{
+  "name": "usgs-water-data",
+  "version": "0.1.0",
+  "description": "Find USGS monitoring sites and download real-time streamflow and water-quality data from NWIS.",
+  "author": {
+    "name": "fdc"
+  },
+  "license": "MIT",
+  "keywords": ["usgs", "hydrology", "water-quality", "nwis", "time-series"]
+}
